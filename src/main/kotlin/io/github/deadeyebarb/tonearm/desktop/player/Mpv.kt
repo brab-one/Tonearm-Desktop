@@ -14,6 +14,8 @@ internal interface MpvLib : Library {
     fun mpv_terminate_destroy(ctx: Pointer)
     fun mpv_set_option_string(ctx: Pointer, name: String, data: String): Int
     fun mpv_set_property_string(ctx: Pointer, name: String, data: String): Int
+    fun mpv_get_property_string(ctx: Pointer, name: String): Pointer?
+    fun mpv_free(data: Pointer)
     fun mpv_command(ctx: Pointer, args: Array<String?>): Int
     fun mpv_observe_property(ctx: Pointer, replyUserdata: Long, name: String, format: Int): Int
     fun mpv_wait_event(ctx: Pointer, timeout: Double): Pointer
@@ -51,7 +53,10 @@ class Mpv(private val listener: Listener) {
         for ((name, value) in listOf(
             "config" to "no", "load-scripts" to "no", "ytdl" to "no", "terminal" to "no", "input-default-bindings" to "no",
             "vid" to "no", "video" to "no", "audio-display" to "no", "idle" to "yes", "keep-open" to "no",
-            "gapless-audio" to "weak", "prefetch-playlist" to "yes", "cache" to "yes", "demuxer-max-bytes" to "128MiB",
+            "gapless-audio" to "weak", "prefetch-playlist" to "yes", "cache" to "yes", "demuxer-max-bytes" to "256MiB",
+            // A proxy in front of the server may drop range support; mpv then caches the whole song
+            // (it reads ahead to the end) and seeks inside that instead of refusing.
+            "force-seekable" to "yes", "demuxer-seekable-cache" to "yes", "demuxer-max-back-bytes" to "256MiB",
             "audio-client-name" to "Tonearm", "volume-max" to "100", "replaygain-clip" to "no",
         )) {
             lib.mpv_set_option_string(ctx, name, value)
@@ -73,6 +78,16 @@ class Mpv(private val listener: Listener) {
     fun command(vararg args: String): Boolean = lib.mpv_command(ctx, arrayOf(*args, null)) >= 0
 
     fun set(name: String, value: String): Boolean = lib.mpv_set_property_string(ctx, name, value) >= 0
+
+    /** A property as text (node properties like `audio-device-list` come back as JSON). */
+    fun get(name: String): String? {
+        val pointer = lib.mpv_get_property_string(ctx, name) ?: return null
+        return try {
+            pointer.getString(0, "UTF-8")
+        } finally {
+            lib.mpv_free(pointer)
+        }
+    }
 
     fun destroy() {
         running = false
