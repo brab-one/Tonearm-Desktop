@@ -1,12 +1,14 @@
 # Tonearm Desktop
 
-The desktop version of [Tonearm](https://github.com/brab-one/Tonearm) for Linux and Windows: a lossless
+The desktop version of [Tonearm](https://github.com/brab-one/Tonearm-PhoneApp) for Linux and Windows: a lossless
 player for **Subsonic / OpenSubsonic** servers (Navidrome and others) with **mutual TLS**, a
 **Lidarr / Brainarr** dashboard, and **Tonearm Connect** so the phone can control it.
 
+The short install and setup guide for all parts is in [Tonearm](https://github.com/brab-one/Tonearm).
+
 It's written in Kotlin with Compose for Desktop: a native UI drawn with Skia, no browser engine, in the
 same neon HUD style as the phone. The Subsonic client, TLS, Lidarr/Brainarr, Connect and YouTube Music
-code is the phone app's own (`shared/` in the Tonearm repository, included here as the `tonearm`
+code is the phone app's own (`shared/` in the [Tonearm-PhoneApp](https://github.com/brab-one/Tonearm-PhoneApp) repository, included here as the `tonearm`
 submodule).
 
 ## Features
