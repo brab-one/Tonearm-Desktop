@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,8 @@ fun Cover(
         when {
             coverId == null -> null
             youtube || coverId.startsWith("https://") -> coverId
+            // A cover on this computer (local music).
+            coverId.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(coverId) -> java.io.File(coverId)
             else -> app.sessions.current()?.let { session ->
                 // Cover URLs carry a fresh auth salt every time; key the caches by what the image is.
                 val key = "cover/${session.id}/$coverId/$size"
@@ -197,7 +200,10 @@ fun <T> LoadContent(loader: Loader<T>, modifier: Modifier = Modifier, content: @
     }
 }
 
-/** A song row: number or "now playing" bars, title, artist/album, quality and duration. Hover lifts it. */
+/**
+ * A song row: number or "now playing" bars, title, artist/album, quality and duration. Hover lifts it
+ * and shows the like and "⋯" buttons; right-click opens the same menu ([songMenu] plus [extraMenu]).
+ */
 @Composable
 fun SongRow(
     app: DesktopApp,
@@ -207,11 +213,20 @@ fun SongRow(
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
     showCover: Boolean = false,
+    extraMenu: List<MenuEntry> = emptyList(),
+    /** A tag instead of the quality one, e.g. for a playlist placeholder. */
+    tag: String? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     val hud = Hud.colors
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
+    val nav = LocalNav.current
+    val ui = LocalUi.current
+    val liked by app.likes.liked.collectAsState()
+    val isLiked = io.github.deadeyebarb.tonearm.desktop.DesktopLikes.key(song.source, song.id) in liked
+    val menu = { songMenu(app, nav, ui, song, extraMenu) }
+    MenuArea(menu) {
     Row(
         modifier.fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
@@ -237,13 +252,19 @@ fun SongRow(
             Text(listOfNotNull(song.artist, song.album).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         when {
+            tag != null -> HudTag(tag, color = hud.accent2)
             song.source == ConnectSong.YOUTUBE -> HudTag("YouTube Music", color = hud.accent2)
             isHiRes(song) -> HudTag("Hi-Res")
             isLossless(song.suffix) -> HudTag("Lossless", color = hud.dim)
         }
-        Spacer(Modifier.width(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+            if (hovered || isLiked) LikeButton(app, song, 32.dp)
+        }
         Text(song.duration?.let { formatDuration(it.toLong()) }.orEmpty(), style = MaterialTheme.typography.labelMedium, color = hud.dim, modifier = Modifier.width(48.dp), textAlign = TextAlign.End)
+        Box(Modifier.width(32.dp)) { if (hovered) MoreButton(menu) }
         trailing()
+    }
     }
 }
 

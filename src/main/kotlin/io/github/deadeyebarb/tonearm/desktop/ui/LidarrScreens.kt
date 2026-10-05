@@ -1,5 +1,9 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
+import androidx.compose.runtime.mutableIntStateOf
+import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
+import io.github.deadeyebarb.tonearm.integrations.BrainarrList
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -237,6 +241,7 @@ fun BrainarrScreen(app: DesktopApp, nav: Navigator) {
                     LinearProgressIndicator(Modifier.fillMaxWidth(), color = hud.accent, trackColor = hud.line)
                     Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim)
                 }
+                WeeklyCard(app, nav, data.lists.first())
                 if (!data.labelled) {
                     Panel(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                         Column(Modifier.padding(16.dp)) {
@@ -256,7 +261,75 @@ fun BrainarrScreen(app: DesktopApp, nav: Navigator) {
                 item { Text("Nothing yet. Ask Brainarr, or wait for Lidarr's next import list sync.", style = MaterialTheme.typography.bodyMedium, color = hud.dim) }
             }
             items(data.picks, key = { it.lidarrId }) { pick ->
-                PickRow(app, nav, pick, onGet = { scope.launch { app.attempt { app.lidarr.getPick(pick); app.message("Lidarr is getting ${pick.name}"); refresh++ } } })
+                val onGet = { scope.launch { app.attempt { app.lidarr.getPick(pick); app.message("Lidarr is getting ${pick.name}"); refresh++ } } }
+                MenuArea({
+                    buildList {
+                        add(MenuEntry("More like ${pick.name} (Brainarr)") { app.moreLikeThis(pick.name, listOf(pick.name), pick.genres) })
+                        pick.libraryArtist?.let { a -> add(MenuEntry("Open in library") { nav.go(Screen.Artist(a.id)) }) }
+                        if (app.config.state.value.youtubeCatalog) add(MenuEntry("${pick.name} on YouTube Music") { app.openYouTubeArtist(nav, pick.name) })
+                        if (pick.status == PickStatus.NOT_MONITORED) add(MenuEntry("Get") { onGet() })
+                    }
+                }) {
+                    PickRow(app, nav, pick, onGet = { onGet() })
+                }
+            }
+        }
+    }
+}
+
+/** Weekly picks: a new Brainarr selection every week, downloaded into a playlist that's deleted a week later unless liked. */
+@Composable
+private fun WeeklyCard(app: DesktopApp, nav: Navigator, main: BrainarrList) {
+    val hud = Hud.colors
+    val scope = rememberCoroutineScope()
+    var changed by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    val loader = rememberLoad(main.id, changed) {
+        val (c, k) = app.lidarr.require()
+        val list = app.weekly.weeklyList(c, k)
+        val current = app.sessions.current()?.let { s -> runCatching { app.weekly.batches(s) }.getOrDefault(emptyList()) }.orEmpty().maxByOrNull { it.state.created }
+        list to current
+    }
+    val (list, current) = (loader.state as? Load.Ready)?.value ?: (null to null)
+    fun set(on: Boolean, albums: Int = list?.perRun ?: WeeklyPicks.DEFAULT_ALBUMS) {
+        busy = true
+        scope.launch {
+            app.attempt {
+                val (c, k) = app.lidarr.require()
+                if (on) {
+                    if (app.weekly.enable(c, k, main, albums)) app.message("Enter your AI provider's API key once for “${WeeklyPicks.LIST_NAME}” in Lidarr → Settings → Import Lists")
+                    app.sessions.current()?.let { session -> app.weekly.tick(c, k, session)?.let(app::message) }
+                } else {
+                    app.weekly.disable(c, k)
+                }
+                changed++
+            }
+            busy = false
+        }
+    }
+    Panel(Modifier.fillMaxWidth().padding(top = 16.dp), glow = list != null) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("WEEKLY PICKS", style = MaterialTheme.typography.labelMedium, color = hud.accent)
+                    Text(
+                        "Every week Brainarr picks new albums, Lidarr downloads them, and they arrive as a playlist. A week later it's deleted, " +
+                            "music included, unless you like the playlist (and give it a name). Albums with a song you liked stay either way.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                androidx.compose.material3.Switch(list != null, { set(it) }, enabled = !busy && loader.state is Load.Ready,
+                    colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = hud.accent))
+            }
+            if (list != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+                    for (n in listOf(3, 5, 10)) HudButton("$n albums a week", { if (list.perRun != n) set(true, n) }, filled = list.perRun == n, enabled = !busy)
+                }
+            }
+            if (current != null) {
+                val status = if (current.state.status == WeeklyState.RUNNING) "Brainarr is picking…" else "${current.state.albums.size} albums · ${current.playlist.songCount} songs here so far"
+                HudButton("${current.playlist.name}: $status", { nav.go(Screen.Playlist(current.playlist.id)) }, filled = false, modifier = Modifier.padding(top = 10.dp))
             }
         }
     }

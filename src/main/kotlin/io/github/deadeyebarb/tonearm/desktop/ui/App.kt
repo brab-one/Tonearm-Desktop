@@ -1,5 +1,21 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
+import androidx.compose.foundation.DarkDefaultContextMenuRepresentation
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalContextMenuRepresentation
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import kotlinx.coroutines.launch
+import org.jetbrains.skia.Image as SkiaImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -71,7 +87,7 @@ import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 
-/** Where the main area is. Rail entries reset the stack; details push onto it. */
+/** Where the main area is. */
 sealed interface Screen {
     data object Home : Screen
     data object Artists : Screen
@@ -81,23 +97,55 @@ sealed interface Screen {
     data object Playlists : Screen
     data class Playlist(val id: String) : Screen
     data object Search : Screen
+    data object Liked : Screen
+    data object Local : Screen
+    data class LocalAlbum(val key: String) : Screen
+    data class YouTubeArtist(val artist: YtArtist) : Screen
+    data class YouTubeAlbum(val album: YtAlbum) : Screen
     data object Lidarr : Screen
     data object Brainarr : Screen
     data object Settings : Screen
 }
 
+/**
+ * Back/forward history like a browser's. Rail entries start a new section; each entry remembers
+ * its section (for the rail's highlight) and keeps its own screen state while you come back.
+ */
 class Navigator {
-    val stack = mutableStateListOf<Screen>(Screen.Home)
-    val current: Screen get() = stack.last()
-    fun go(screen: Screen) {
-        if (current != screen) stack += screen
+    data class Entry(val screen: Screen, val section: Screen, val id: Int)
+
+    private var nextId = 1
+    private val history = mutableStateListOf(Entry(Screen.Home, Screen.Home, 0))
+    private var position by mutableIntStateOf(0)
+
+    val entry: Entry get() = history[position]
+    val current: Screen get() = entry.screen
+    val section: Screen get() = entry.section
+    val canBack: Boolean get() = position > 0
+    val canForward: Boolean get() = position < history.lastIndex
+
+    fun go(screen: Screen) = push(screen, section)
+
+    fun root(screen: Screen) = push(screen, screen)
+
+    private fun push(screen: Screen, section: Screen) {
+        if (screen == current) return
+        while (history.lastIndex > position) history.removeAt(history.lastIndex)
+        history += Entry(screen, section, nextId++)
+        if (history.size > MAX) history.removeAt(0)
+        position = history.lastIndex
     }
-    fun root(screen: Screen) {
-        stack.clear()
-        stack += screen
-    }
+
     fun back() {
-        if (stack.size > 1) stack.removeAt(stack.lastIndex)
+        if (canBack) position--
+    }
+
+    fun forward() {
+        if (canForward) position++
+    }
+
+    private companion object {
+        const val MAX = 100
     }
 }
 
@@ -105,10 +153,12 @@ private data class RailItem(val screen: Screen, val label: String, val icon: Ima
 
 private val railItems = listOf(
     RailItem(Screen.Home, "Home", Icons.Rounded.Home),
+    RailItem(Screen.Search, "Search", Icons.Rounded.Search),
+    RailItem(Screen.Liked, "Liked", Icons.Rounded.Favorite),
     RailItem(Screen.Artists, "Artists", Icons.Rounded.Person),
     RailItem(Screen.Albums, "Albums", Icons.Rounded.Album),
     RailItem(Screen.Playlists, "Playlists", Icons.Rounded.LibraryMusic),
-    RailItem(Screen.Search, "Search", Icons.Rounded.Search),
+    RailItem(Screen.Local, "This computer", Icons.Rounded.Computer),
     RailItem(Screen.Lidarr, "Lidarr", Icons.Rounded.CloudDownload),
     RailItem(Screen.Brainarr, "Brainarr", Icons.Rounded.AutoAwesome),
     RailItem(Screen.Settings, "Settings", Icons.Rounded.Settings),
@@ -119,6 +169,8 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
     val config by app.config.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
+    val ui = remember { UiState() }
+    val states = rememberSaveableStateHolder()
     var queueOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { app.messages.collect { snackbar.showSnackbar(it) } }
     val playerError = app.player.state.collectAsState().value.error
@@ -129,6 +181,11 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
         }
     }
 
+    CompositionLocalProvider(
+        LocalUi provides ui,
+        LocalNav provides nav,
+        LocalContextMenuRepresentation provides DarkDefaultContextMenuRepresentation,
+    ) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(hud.deep, hud.void)))) {
         if (config.server == null) {
             SetupScreen(app)
@@ -138,12 +195,21 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         Column(Modifier.fillMaxSize()) {
-                            if (nav.stack.size > 1) {
-                                IconButton(onClick = nav::back, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) {
-                                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = hud.text)
+                            if (nav.canBack || nav.canForward) {
+                                Row(Modifier.padding(start = 8.dp, top = 8.dp)) {
+                                    IconButton(onClick = nav::back, enabled = nav.canBack) {
+                                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = if (nav.canBack) hud.text else hud.line)
+                                    }
+                                    IconButton(onClick = nav::forward, enabled = nav.canForward) {
+                                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, "Forward", tint = if (nav.canForward) hud.text else hud.line)
+                                    }
                                 }
                             }
-                            Box(Modifier.weight(1f)) { ScreenContent(app, nav, nav.current) }
+                            val entry = nav.entry
+                            Box(Modifier.weight(1f)) {
+                                // Each history entry keeps its scroll position and inputs while you go back and forth.
+                                states.SaveableStateProvider(entry.id) { ScreenContent(app, nav, entry.screen) }
+                            }
                         }
                     }
                     PlayerBar(app, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen)
@@ -152,6 +218,8 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 104.dp))
+        Dialogs(app)
+    }
     }
 }
 
@@ -164,8 +232,13 @@ private fun ScreenContent(app: DesktopApp, nav: Navigator, screen: Screen) {
         Screen.Albums -> AlbumsScreen(app, nav)
         is Screen.Album -> AlbumScreen(app, nav, screen.id)
         Screen.Playlists -> PlaylistsScreen(app, nav)
-        is Screen.Playlist -> PlaylistScreen(app, screen.id)
+        is Screen.Playlist -> PlaylistScreen(app, nav, screen.id)
         Screen.Search -> SearchScreen(app, nav)
+        Screen.Liked -> LikedScreen(app, nav)
+        Screen.Local -> LocalScreen(app, nav)
+        is Screen.LocalAlbum -> LocalAlbumScreen(app, nav, screen.key)
+        is Screen.YouTubeArtist -> YouTubeArtistScreen(app, nav, screen.artist)
+        is Screen.YouTubeAlbum -> YouTubeAlbumScreen(app, nav, screen.album)
         Screen.Lidarr -> LidarrScreen(app, nav)
         Screen.Brainarr -> BrainarrScreen(app, nav)
         Screen.Settings -> SettingsScreen(app)
@@ -175,15 +248,21 @@ private fun ScreenContent(app: DesktopApp, nav: Navigator, screen: Screen) {
 @Composable
 private fun Rail(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
-    val root = nav.stack.first()
+    val root = nav.section
     val connect by app.connect.status.collectAsState()
+    val logo = remember { BitmapPainter(SkiaImage.makeFromEncoded(requireNotNull(DesktopApp::class.java.getResourceAsStream("/icon.png")).readBytes()).toComposeImageBitmap()) }
     Column(Modifier.width(212.dp).fillMaxHeight().background(hud.void.copy(alpha = 0.6f)).padding(vertical = 18.dp)) {
-        Text(
-            "TONEARM",
-            style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Black, fontSize = 24.sp, letterSpacing = 4.sp, brush = Brush.horizontalGradient(listOf(hud.accent, hud.accent2))),
-            modifier = Modifier.padding(horizontal = 20.dp),
-        )
-        Text("DESKTOP // mTLS", style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.padding(horizontal = 20.dp))
+        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(logo, "Tonearm", Modifier.size(40.dp))
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(
+                    "TONEARM", maxLines = 1, softWrap = false,
+                    style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp, brush = Brush.horizontalGradient(listOf(hud.accent, hud.accent2))),
+                )
+                Text("DESKTOP // mTLS", style = MaterialTheme.typography.labelSmall, color = hud.dim)
+            }
+        }
         Spacer(Modifier.height(20.dp))
         for (item in railItems) {
             val selected = root == item.screen
@@ -226,11 +305,14 @@ private fun PlayerBar(app: DesktopApp, onQueue: () -> Unit, queueOpen: Boolean) 
             if (song != null) {
                 SongCover(app, song, Modifier.size(64.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.small))
                 Spacer(Modifier.width(14.dp))
-                Column {
+                Column(Modifier.weight(1f, fill = false)) {
                     Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(qualityLine(song, state), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1)
+                    outputLine(state)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1) }
                 }
+                Spacer(Modifier.width(4.dp))
+                LikeButton(app, song)
             } else {
                 Text("NOTHING PLAYING", style = MaterialTheme.typography.labelMedium, color = hud.dim)
             }
@@ -294,8 +376,20 @@ private fun SeekBar(state: PlayerState, onSeek: (Long) -> Unit) {
     }
 }
 
+/** What mpv sends to the sound device, when it differs from the file (resampled or converted). */
+private fun outputLine(state: PlayerState): String? {
+    val rate = state.outRate ?: return null
+    val format = state.outFormat?.uppercase()
+    val same = rate == state.sampleRate
+    return if (same) "OUT ▸ ${rate / 1000.0} KHZ ${format.orEmpty()} ▸ NATIVE RATE" else "OUT ▸ ${rate / 1000.0} KHZ ${format.orEmpty()} ▸ RESAMPLED"
+}
+
 private fun qualityLine(song: ConnectSong, state: PlayerState): String = when (song.source) {
     ConnectSong.YOUTUBE -> listOfNotNull("YOUTUBE MUSIC", state.codec?.uppercase(), state.sampleRate?.let { "${it / 1000.0} KHZ" }).joinToString(" ▸ ")
+    ConnectSong.LOCAL -> listOfNotNull(
+        "LOCAL", (state.codec ?: song.suffix)?.uppercase(), song.bitDepth?.let { "$it BIT" },
+        (state.sampleRate ?: song.samplingRate)?.let { "${it / 1000.0} KHZ" },
+    ).joinToString(" ▸ ")
     else -> listOfNotNull(
         (state.codec ?: song.suffix)?.uppercase(),
         song.bitDepth?.let { "$it BIT" },
@@ -314,6 +408,12 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("QUEUE", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             Text("${state.queue.size} SONGS", style = MaterialTheme.typography.labelSmall, color = hud.dim)
+            val ui = LocalUi.current
+            IconButton(onClick = {
+                ui.prompt = Prompt("Save the queue as a playlist", "Name", "Queue", "Save") { name ->
+                    app.scope.launch { app.attempt { app.playlists.create(name, state.queue); app.message("Saved as “$name”") } }
+                }
+            }, enabled = state.queue.isNotEmpty()) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "Save as playlist", tint = hud.dim) }
             IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close queue", tint = hud.dim) }
         }
         LazyColumn(state = list, modifier = Modifier.weight(1f)) {

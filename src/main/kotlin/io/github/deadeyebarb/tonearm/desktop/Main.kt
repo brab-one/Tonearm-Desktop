@@ -1,6 +1,8 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
@@ -29,7 +31,12 @@ import io.github.deadeyebarb.tonearm.net.forImages
 import okhttp3.Call
 import okio.Path.Companion.toOkioPath
 import org.jetbrains.skia.Image
+import java.awt.AWTEvent
 import java.awt.Dimension
+import java.awt.Toolkit
+import java.awt.event.AWTEventListener
+import java.awt.event.MouseEvent
+import java.awt.event.MouseWheelEvent
 import javax.swing.JOptionPane
 import kotlin.system.exitProcess
 
@@ -53,6 +60,20 @@ fun main() {
                 .build()
         }
         val nav = remember { Navigator() }
+        // The mouse's back and forward buttons go back and forth like in a browser. AWT numbers them
+        // 4/5 on Windows and macOS, 6/7 on X11 (where 4–7 are taken by the scroll wheel).
+        DisposableEffect(nav) {
+            val listener = AWTEventListener { event ->
+                if (event is MouseEvent && event !is MouseWheelEvent && event.id == MouseEvent.MOUSE_PRESSED) {
+                    when (event.button) {
+                        4, 6 -> nav.back()
+                        5, 7 -> nav.forward()
+                    }
+                }
+            }
+            Toolkit.getDefaultToolkit().addAWTEventListener(listener, AWTEvent.MOUSE_EVENT_MASK)
+            onDispose { Toolkit.getDefaultToolkit().removeAWTEventListener(listener) }
+        }
         Window(
             onCloseRequest = {
                 app.shutdown()
@@ -67,6 +88,10 @@ fun main() {
                     event.key == Key.MediaPlayPause || (event.isCtrlPressed && event.key == Key.P) -> app.player.togglePlay()
                     event.key == Key.MediaNext || (event.isCtrlPressed && event.key == Key.DirectionRight) -> app.player.next()
                     event.key == Key.MediaPrevious || (event.isCtrlPressed && event.key == Key.DirectionLeft) -> app.player.previous()
+                    event.isAltPressed && event.key == Key.DirectionLeft -> nav.back()
+                    event.isAltPressed && event.key == Key.DirectionRight -> nav.forward()
+                    event.key == Key.Back -> nav.back()
+                    event.key == Key.Forward -> nav.forward()
                     else -> return@Window false
                 }
                 true

@@ -56,6 +56,9 @@ import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import androidx.compose.material.icons.rounded.AutoAwesome
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -100,8 +103,26 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
 }
 
 @Composable
-private fun AlbumCard(app: DesktopApp, nav: Navigator, album: Album) =
-    CardItem(app, album.coverArt, album.name, listOfNotNull(album.artistLabel.ifEmpty { null }, album.year?.toString()).joinToString(" · "), { nav.go(Screen.Album(album.id)) })
+private fun AlbumCard(app: DesktopApp, nav: Navigator, album: Album) {
+    val ui = LocalUi.current
+    MenuArea({ albumMenu(app, nav, ui, album) }) {
+        CardItem(app, album.coverArt, album.name, listOfNotNull(album.artistLabel.ifEmpty { null }, album.year?.toString()).joinToString(" · "), { nav.go(Screen.Album(album.id)) })
+    }
+}
+
+private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album): List<MenuEntry> = buildList {
+    fun songs(block: suspend (List<ConnectSong>) -> Unit) = app.scope.launch { app.attempt { block(app.api.album(album.id).song.map { it.toConnectSong() }) } }
+    add(MenuEntry("Play") { songs { app.player.play(it) } })
+    add(MenuEntry("Play next") { songs { app.player.playNext(it) } })
+    add(MenuEntry("Add to queue") { songs { app.player.enqueue(it) } })
+    add(MenuEntry("Add to playlist…") { songs { ui.addToPlaylist = it } })
+    if (app.config.state.value.lidarr != null) {
+        add(MenuEntry("More like this (Brainarr)") {
+            app.moreLikeThis("“${album.name}”", listOfNotNull(album.artistLabel.takeIf { it.isNotEmpty() }?.let { "the album “${album.name}” by $it" }, album.artistLabel), listOfNotNull(album.genre))
+        })
+    }
+    album.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
+}
 
 @Composable
 fun ArtistsScreen(app: DesktopApp, nav: Navigator) {
@@ -123,6 +144,7 @@ fun ArtistsScreen(app: DesktopApp, nav: Navigator) {
 @Composable
 fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
     val scope = rememberCoroutineScope()
+    val config by app.config.state.collectAsState()
     val loader = rememberLoad(id) { app.api.artist(id) }
     LoadContent(loader) { artist ->
         val albums = artist.album.sortedByDescending { it.year ?: 0 }
@@ -139,12 +161,18 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             HudButton("Play", { scope.launch { app.attempt { app.player.play(songsOf(app, albums)) } } }, icon = Icons.Rounded.PlayArrow)
                             HudButton("Shuffle", { scope.launch { app.attempt { app.player.play(songsOf(app, albums).shuffled()) } } }, icon = Icons.Rounded.Shuffle, filled = false)
+                            if (config.lidarr != null) {
+                                HudButton("More like this", {
+                                    app.moreLikeThis(artist.name, listOf(artist.name), albums.mapNotNull { it.genre }.distinct())
+                                }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                            }
                         }
                     }
                 }
             }
             fullWidth { SectionHeader("Albums") }
             items(albums, key = { it.id }) { album -> AlbumCard(app, nav, album) }
+            if (config.youtubeCatalog) fullWidth { MoreOnYouTube(app, nav, artist.name, albums.map { it.name }) }
         }
     }
 }
@@ -203,34 +231,14 @@ fun AlbumScreen(app: DesktopApp, nav: Navigator, id: String) {
             songs = album.song,
             onSubtitle = album.artistId?.let { artistId -> { nav.go(Screen.Artist(artistId)) } },
             numberOf = { song, _ -> song.track },
-        )
-    }
-}
-
-@Composable
-fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
-    val loader = rememberLoad(app.config.state.value.server?.baseUrl) { app.api.playlists() }
-    LoadContent(loader) { playlists ->
-        Column(Modifier.fillMaxSize()) {
-            ScreenTitle("Playlists", "${playlists.size} PLAYLISTS")
-            if (playlists.isEmpty()) {
-                EmptyState(Icons.Rounded.LibraryMusic, "No playlists", "Playlists you make on the phone or the server show up here.")
-            } else {
-                LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = contentPadding) {
-                    items(playlists, key = { it.id }) { p ->
-                        CardItem(app, p.coverArt, p.name, "${p.songCount} songs", { nav.go(Screen.Playlist(p.id)) })
-                    }
+            extraButtons = {
+                if (app.config.state.value.lidarr != null) {
+                    HudButton("More like this", {
+                        app.moreLikeThis("“${album.name}”", listOf("the album “${album.name}” by ${album.artistLabel}", album.artistLabel), listOfNotNull(album.genre))
+                    }, icon = Icons.Rounded.AutoAwesome, filled = false)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun PlaylistScreen(app: DesktopApp, id: String) {
-    val loader = rememberLoad(id) { app.api.playlist(id) }
-    LoadContent(loader) { playlist ->
-        TrackListPage(app, playlist.coverArt, "PLAYLIST", playlist.name, playlist.comment ?: "${playlist.songCount} songs", playlist.entry, numberOf = { _, i -> i + 1 })
+            },
+        )
     }
 }
 
@@ -245,6 +253,7 @@ private fun TrackListPage(
     songs: List<Song>,
     onSubtitle: (() -> Unit)? = null,
     numberOf: (Song, Int) -> Int?,
+    extraButtons: @Composable () -> Unit = {},
 ) {
     val hud = Hud.colors
     val state by app.player.state.collectAsState()
@@ -268,6 +277,9 @@ private fun TrackListPage(
                         HudButton("Play", { app.player.play(queue) }, icon = Icons.Rounded.PlayArrow, enabled = queue.isNotEmpty())
                         HudButton("Shuffle", { app.player.play(queue, index = queue.indices.randomOrNull() ?: 0, shuffle = true) }, icon = Icons.Rounded.Shuffle, filled = false, enabled = queue.isNotEmpty())
                         HudButton("Add to queue", { app.player.enqueue(queue); app.message("Added ${queue.size} songs to the queue") }, icon = Icons.AutoMirrored.Rounded.PlaylistAdd, filled = false, enabled = queue.isNotEmpty())
+                        val ui = LocalUi.current
+                        HudButton("Add to playlist", { ui.addToPlaylist = queue }, filled = false, enabled = queue.isNotEmpty())
+                        extraButtons()
                     }
                 }
             }
@@ -296,7 +308,7 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
         )
         val q = query.trim()
         if (q.isEmpty()) {
-            EmptyState(Icons.Rounded.Search, "Search your library", if (config.playYouTube) "Artists, albums and songs on your server, plus YouTube Music for what you don't have." else "Artists, albums and songs on your server.")
+            EmptyState(Icons.Rounded.Search, "Search your library", if (config.playYouTube) "Artists, albums and songs on your server and this computer, plus YouTube Music for what you don't have." else "Artists, albums and songs on your server and this computer.")
             return@Column
         }
         val library = rememberLoad(q) {
@@ -308,12 +320,23 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
             delay(300)
             app.youtube.searchSongs(q, 15)
         }
+        val catalog = rememberLoad(q, config.youtubeCatalog) {
+            if (!config.youtubeCatalog) return@rememberLoad emptyList<YtArtist>() to emptyList<YtAlbum>()
+            delay(400)
+            coroutineScope {
+                val artists = async { runCatching { app.catalog.searchArtists(q, 8) }.getOrDefault(emptyList()) }
+                val albums = async { runCatching { app.catalog.searchAlbums(q, 12) }.getOrDefault(emptyList()) }
+                artists.await() to albums.await()
+            }
+        }
+        val localHits = remember(q, app.local.tracks.collectAsState().value) { app.local.search(q).take(50).map { it.toConnectSong() } }
         LoadContent(library) { result ->
             val have = result.song.map { Names.key(it.artist.orEmpty(), it.title) }.toSet()
             val yt = ((youtube.state as? Load.Ready)?.value).orEmpty().filter { Names.key(it.artist.orEmpty(), it.title) !in have }
             val songs = remember(result) { result.song.map { it.toConnectSong() } }
             val ytQueue = remember(yt) { yt.map { it.toConnectSong(ConnectSong.YOUTUBE) } }
-            if (result.artist.isEmpty() && result.album.isEmpty() && songs.isEmpty() && ytQueue.isEmpty() && youtube.state !is Load.Loading) {
+            val (ytArtists, ytAlbums) = (catalog.state as? Load.Ready)?.value ?: (emptyList<YtArtist>() to emptyList())
+            if (result.artist.isEmpty() && result.album.isEmpty() && songs.isEmpty() && ytQueue.isEmpty() && localHits.isEmpty() && ytArtists.isEmpty() && youtube.state !is Load.Loading) {
                 EmptyState(Icons.Rounded.SearchOff, "Nothing found for “$q”", "Request it from the Lidarr page.")
                 return@LoadContent
             }
@@ -336,6 +359,24 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                         SongRow(app, song, number = null, playing = state.current?.id == song.id, onPlay = { app.player.play(songs, i) }, showCover = true)
                     }
                 }
+                if (localHits.isNotEmpty()) {
+                    item { SectionHeader("On this computer") }
+                    itemsIndexed(localHits, key = { i, s -> "local:$i:${s.id}" }) { i, song ->
+                        SongRow(app, song, number = null, playing = state.current?.id == song.id, onPlay = { app.player.play(localHits, i) }, showCover = true)
+                    }
+                }
+                if (ytArtists.isNotEmpty()) {
+                    item {
+                        SectionHeader("Artists on YouTube Music")
+                        LazyRow { items(ytArtists, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.name, "YouTube Music", { nav.go(Screen.YouTubeArtist(a)) }, round = true, width = 150.dp) } }
+                    }
+                }
+                if (ytAlbums.isNotEmpty()) {
+                    item {
+                        SectionHeader("Albums on YouTube Music")
+                        LazyRow { items(ytAlbums, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, a.artist, { nav.go(Screen.YouTubeAlbum(a)) }) } }
+                    }
+                }
                 if (config.playYouTube) {
                     when (youtube.state) {
                         Load.Loading -> item { Text("Searching YouTube Music…", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, modifier = Modifier.padding(16.dp)) }
@@ -344,7 +385,7 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                             item {
                                 SectionHeader("On YouTube Music")
                                 Text(
-                                    "Not on your server. These play from YouTube Music" + if (config.requestWhatYouPlay && config.lidarr != null) ", and their artist gets requested in Lidarr." else ".",
+                                    "Not on your server. These play from YouTube Music" + if (config.lidarr != null) "; like one (or right-click → Request) to get it in Lidarr." else ".",
                                     style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim,
                                 )
                             }

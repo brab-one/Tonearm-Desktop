@@ -95,8 +95,42 @@ fun SettingsScreen(app: DesktopApp) {
             Toggle("Play what you don't have from YouTube Music", "Search results that aren't on your server play from YouTube Music (Opus, up to 160 kbps).", config.playYouTube) { v ->
                 app.config.update { it.copy(playYouTube = v) }
             }
-            Toggle("Request what you play", "Artists you play from YouTube Music are requested in Lidarr, so the server gets the lossless version.", config.requestWhatYouPlay) { v ->
-                app.config.update { it.copy(requestWhatYouPlay = v) }
+            Toggle("Request songs you like", "Liking a YouTube Music song asks Lidarr for its album, so your server gets the lossless version. Just playing requests nothing.", config.requestLikes) { v ->
+                app.config.update { it.copy(requestLikes = v) }
+            }
+            Toggle("YouTube Music artists and albums", "Search and artist pages also show artists and albums from YouTube Music: bios, popular songs and albums you don't have.", config.youtubeCatalog) { v ->
+                app.config.update { it.copy(youtubeCatalog = v) }
+            }
+            Text("When the queue ends", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+                for ((value, label) in listOf("stop" to "Stop", "similar" to "Similar music", "playlist" to "Another playlist")) {
+                    HudButton(label, { app.config.update { it.copy(whenQueueEnds = value) } }, filled = config.whenQueueEnds == value)
+                }
+            }
+            Text(
+                when (config.whenQueueEnds) {
+                    "similar" -> "Songs like the last one: from your library when you have them, otherwise from YouTube Music."
+                    "playlist" -> "One of your other playlists, picked at random."
+                    else -> "Playback stops after the last song."
+                },
+                style = MaterialTheme.typography.bodySmall, color = hud.dim,
+            )
+
+            SectionHeader("Audio")
+            AudioSection(app)
+
+            SectionHeader("Music on this computer")
+            Text("Folders with music files; they show up under “This computer” and in search, and play straight from disk.", style = MaterialTheme.typography.bodyMedium, color = hud.dim)
+            for (folder in config.localFolders) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    Text(folder, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    HudButton("Remove", { app.config.update { it.copy(localFolders = it.localFolders - folder) } }, filled = false)
+                }
+            }
+            val localCount by app.local.tracks.collectAsState()
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                HudButton("Add folder", { addLocalFolder(app) }, filled = false)
+                Text("${localCount.size} songs found", style = MaterialTheme.typography.labelMedium, color = hud.dim)
             }
 
             SectionHeader("Tonearm Connect")
@@ -120,7 +154,7 @@ fun SettingsScreen(app: DesktopApp) {
             )
 
             SectionHeader("About")
-            Text("Tonearm desktop 1.0.0 · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
+            Text("Tonearm desktop 1.1.0 · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
         }
     }
 }

@@ -23,7 +23,15 @@ data class DesktopConfig(
     val replayGain: Boolean = true,
     val volume: Int = 80,
     val playYouTube: Boolean = true,
-    val requestWhatYouPlay: Boolean = true,
+    /** A like on a YouTube Music song requests its album in Lidarr. Playing alone requests nothing. */
+    val requestLikes: Boolean = true,
+    /** Search and artist pages also show YouTube Music's artists and albums. */
+    val youtubeCatalog: Boolean = true,
+    /** What plays when the queue runs out: "stop", "similar" or "playlist". */
+    val whenQueueEnds: String = "similar",
+    /** Folders on this computer whose music shows up under "This computer". */
+    val localFolders: List<String> = emptyList(),
+    val audio: AudioSettings = AudioSettings(),
     /** MusicBrainz ids of artists Brainarr runs started from here added. */
     val brainarrRecorded: List<String> = emptyList(),
 ) {
@@ -61,3 +69,17 @@ class ConfigStore(private val json: Json, private val file: File = File(AppDirs.
         }
     }
 }
+
+/** Output and equalizer settings (see Settings → Audio). */
+@Serializable
+data class AudioSettings(
+    /** An mpv audio device name ("auto" = the system default). */
+    val device: String = "auto",
+    /** Take the device for Tonearm alone (WASAPI exclusive on Windows), so nothing resamples or mixes. */
+    val exclusive: Boolean = false,
+    val equalizer: Boolean = false,
+    val preset: String = "Flat",
+    /** dB per band of [io.github.deadeyebarb.tonearm.desktop.player.Equalizer.BANDS]. */
+    val gains: List<Double> = List(10) { 0.0 },
+    val preampDb: Double = 0.0,
+)

@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.desktop.player
 
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
+import io.github.deadeyebarb.tonearm.desktop.config.AudioSettings
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import kotlinx.coroutines.CoroutineScope
@@ -12,6 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -29,6 +33,11 @@ data class PlayerState(
     val repeat: String = "off",
     val codec: String? = null,
     val sampleRate: Int? = null,
+    /** The decoded sample format (s16, s32, floatp…). */
+    val format: String? = null,
+    /** What goes to the sound device. */
+    val outRate: Int? = null,
+    val outFormat: String? = null,
     val error: String? = null,
 ) {
     val current: ConnectSong? get() = queue.getOrNull(index)
@@ -44,8 +53,8 @@ class DesktopPlayer(
     private val api: SubsonicApi,
     private val sessions: DesktopSessions,
     private val config: ConfigStore,
-    /** Called when a YouTube Music song starts playing (to request it in Lidarr). */
-    private val onYouTubePlaying: (ConnectSong) -> Unit = {},
+    /** Songs to append when the last one starts ("When the queue ends"); gets the played song keys. */
+    private val onQueueEnd: suspend (last: ConnectSong, played: Set<String>) -> List<ConnectSong> = { _, _ -> emptyList() },
 ) : Mpv.Listener {
     private val thread = Executors.newSingleThreadExecutor { Thread(it, "player").apply { isDaemon = true } }
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -59,6 +68,7 @@ class DesktopPlayer(
     private val entries = ArrayList<Int>()
     private var nowPlayingSentFor = -1
     private var scrobbledFor = -1
+    private var continuedAfter = -1
 
     init {
         mpv.observe("playlist-pos", Mpv.FORMAT_INT64)
@@ -70,8 +80,35 @@ class DesktopPlayer(
         mpv.observe("paused-for-cache", Mpv.FORMAT_FLAG)
         mpv.observe("audio-codec-name", Mpv.FORMAT_STRING)
         mpv.observe("audio-params/samplerate", Mpv.FORMAT_INT64)
+        mpv.observe("audio-params/format", Mpv.FORMAT_STRING)
+        mpv.observe("audio-out-params/samplerate", Mpv.FORMAT_INT64)
+        mpv.observe("audio-out-params/format", Mpv.FORMAT_STRING)
         mpv.set("volume", config.state.value.volume.toString())
         setReplayGain(config.state.value.replayGain)
+        applyAudio(config.state.value.audio)
+    }
+
+    /** Output device, exclusive mode and the equalizer. */
+    fun applyAudio(audio: AudioSettings) = post {
+        mpv.set("audio-device", audio.device)
+        mpv.set("audio-exclusive", if (audio.exclusive) "yes" else "no")
+        mpv.set("af", Equalizer.filter(audio))
+        if (System.getenv("TONEARM_DEBUG") != null) System.err.println("audio: device=${mpv.get("audio-device")} exclusive=${mpv.get("audio-exclusive")} af=${mpv.get("af")}")
+    }
+
+    /** What the equalizer filter is right now (for checks). */
+    fun currentFilter(): String? = mpv.get("af")
+
+    /** Sound devices mpv can play to, as name to description. */
+    fun audioDevices(): List<Pair<String, String>> {
+        val text = mpv.get("audio-device-list") ?: return emptyList()
+        return runCatching {
+            kotlinx.serialization.json.Json.parseToJsonElement(text).jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                name to (obj["description"]?.jsonPrimitive?.content ?: name)
+            }
+        }.getOrDefault(emptyList())
     }
 
     // --- Commands (any thread) -----------------------------------------------------------------
@@ -151,9 +188,14 @@ class DesktopPlayer(
     }
 
     /** Adds songs to the end of the queue. */
-    fun enqueue(songs: List<ConnectSong>) = post {
-        if (songs.isEmpty()) return@post
-        if (_state.value.queue.isEmpty()) return@post play(songs, 0)
+    fun enqueue(songs: List<ConnectSong>) = post { enqueueNow(songs) }
+
+    private fun enqueueNow(songs: List<ConnectSong>) {
+        if (songs.isEmpty()) return
+        if (_state.value.queue.isEmpty()) {
+            play(songs, 0)
+            return
+        }
         val start = _state.value.queue.size
         _state.update { it.copy(queue = it.queue + songs) }
         order = order + (start until start + songs.size)
@@ -232,6 +274,9 @@ class DesktopPlayer(
             }
             "audio-codec-name" -> _state.update { it.copy(codec = value as? String) }
             "audio-params/samplerate" -> _state.update { it.copy(sampleRate = (value as? Long)?.toInt()) }
+            "audio-params/format" -> _state.update { it.copy(format = value as? String) }
+            "audio-out-params/samplerate" -> _state.update { it.copy(outRate = (value as? Long)?.toInt()) }
+            "audio-out-params/format" -> _state.update { it.copy(outFormat = value as? String) }
         }
     }
 
@@ -244,8 +289,8 @@ class DesktopPlayer(
         if (s.index != nowPlayingSentFor) {
             nowPlayingSentFor = s.index
             if (song.source == ConnectSong.SERVER) scrobble(song, submission = false)
-            if (song.source == ConnectSong.YOUTUBE) onYouTubePlaying(song)
         }
+        maybeContinue()
     }
 
     override fun onEndFile(reason: Int, error: String?) = post {
@@ -264,7 +309,7 @@ class DesktopPlayer(
     private fun loadCurrent(startMs: Long) {
         val s = _state.value
         val song = s.current ?: return
-        val url = proxy.url(song)
+        val url = urlOf(song)
         if (startMs > 0) {
             mpv.command("loadfile", url, "replace", "-1", "start=" + String.format(Locale.ROOT, "%.3f", startMs / 1000.0))
         } else {
@@ -306,7 +351,23 @@ class DesktopPlayer(
         }
         if (entries.size == 1 && next != null) {
             val song = _state.value.queue.getOrNull(next) ?: return
-            if (mpv.command("loadfile", proxy.url(song), "append")) entries += next
+            if (mpv.command("loadfile", urlOf(song), "append")) entries += next
+        }
+    }
+
+    /** Files on this computer play from disk; the rest through the proxy. */
+    private fun urlOf(song: ConnectSong) = if (song.source == ConnectSong.LOCAL) song.id else proxy.url(song)
+
+    /** On the last song (no repeat), asks for more to play after it, once per song. */
+    private fun maybeContinue() {
+        val s = _state.value
+        val last = s.current ?: return
+        if (s.repeat != "off" || continuedAfter == s.index || nextIndex(s.index, wrap = false) != null) return
+        continuedAfter = s.index
+        val played = s.queue.map { key(it) }.toSet()
+        io.launch {
+            val more = runCatching { onQueueEnd(last, played) }.getOrDefault(emptyList())
+            if (more.isNotEmpty()) post { if (nextIndex(_state.value.index, wrap = false) == null) enqueueNow(more) }
         }
     }
 
@@ -336,6 +397,7 @@ class DesktopPlayer(
         for (i in entries.indices) if (entries[i] >= from) entries[i] += by
         if (nowPlayingSentFor >= from) nowPlayingSentFor += by
         if (scrobbledFor >= from) scrobbledFor += by
+        if (continuedAfter >= from) continuedAfter += by
     }
 
     /** Scrobbles at half the song or four minutes, like Last.fm, once per play. */
@@ -356,6 +418,9 @@ class DesktopPlayer(
 
     companion object {
         private const val RESTART_THRESHOLD_MS = 3_000L
+
+        /** Matches [io.github.deadeyebarb.tonearm.integrations.Continuation.key]. */
+        fun key(song: ConnectSong) = (if (song.source == ConnectSong.YOUTUBE) "yt/" else "lib/") + song.id
 
         /** Queue order to play in: in place, or [start] first and the rest shuffled. */
         fun playOrder(size: Int, start: Int, shuffle: Boolean): List<Int> =

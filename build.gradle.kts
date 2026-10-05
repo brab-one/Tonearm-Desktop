@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "io.github.deadeyebarb.tonearm"
-version = "1.0.0"
+version = "1.1.0"
 
 kotlin {
     jvmToolchain(21)
@@ -29,6 +29,8 @@ dependencies {
     implementation(libs.newpipe.extractor)
     implementation(libs.jna)
     implementation(libs.jna.platform)
+    // Tags and cover art of local music files.
+    implementation("net.jthink:jaudiotagger:3.0.1")
 
     testImplementation(kotlin("test"))
     testImplementation(libs.okhttp.mockwebserver)
@@ -71,10 +73,10 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "Tonearm"
-            packageVersion = "1.0.0"
+            packageVersion = "1.1.0"
             description = "Lossless Subsonic player with Lidarr and Brainarr"
             vendor = "Deadeyebarb"
-            modules("java.naming", "java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.sql", "java.management")
+            modules("java.naming", "java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.sql", "java.management", "java.logging")
             linux {
                 iconFile.set(project.file("src/main/resources/icon.png"))
                 menuGroup = "AudioVideo"

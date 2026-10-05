@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop.connect
 
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
 import io.github.deadeyebarb.tonearm.connect.ConnectPluginMissingException
 import io.github.deadeyebarb.tonearm.connect.DeviceState
@@ -143,7 +144,10 @@ class DesktopConnect(
         fun PlayerState.toPlayback(from: Int = windowStart(queue.size, index), now: Long = System.currentTimeMillis()): PlaybackState {
             return PlaybackState(
                 playing = playing, positionMs = positionMs, durationMs = durationMs, at = now,
-                index = if (index < 0) -1 else index - from, queue = queue.drop(from).take(MAX_QUEUE),
+                index = if (index < 0) -1 else index - from, queue = queue.drop(from).take(MAX_QUEUE).map { song ->
+                    // A local file's cover is a path on this computer; the phone can't show it.
+                    if (song.source == ConnectSong.LOCAL) song.copy(coverArt = null) else song
+                },
                 volume = volume, shuffle = shuffle, repeat = repeat,
             )
         }

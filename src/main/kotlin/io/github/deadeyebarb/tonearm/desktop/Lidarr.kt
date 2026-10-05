@@ -22,6 +22,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import java.io.IOException
 import java.time.Instant
 
@@ -69,7 +75,7 @@ class DesktopLidarr(private val client: LidarrClient, private val api: SubsonicA
     suspend fun brainarrLists(): List<BrainarrList> {
         val (c, k) = require()
         return client.importLists(c, k)
-            .filter { (list, _) -> list.implementation.equals(BrainarrList.IMPLEMENTATION, true) }
+            .filter { (list, _) -> list.implementation.equals(BrainarrList.IMPLEMENTATION, true) && !list.name.startsWith(BrainarrList.TONEARM_PREFIX) }
             .map { (list, raw) -> BrainarrList.from(list, raw) }
     }
 
@@ -102,6 +108,79 @@ class DesktopLidarr(private val client: LidarrClient, private val api: SubsonicA
                 )
             },
         )
+    }
+
+    /**
+     * "More like this": a Brainarr list of Tonearm's own whose music styles are the selection (artists,
+     * an album, a playlist's artists), run once. It picks a few albums, which Lidarr monitors and gets.
+     */
+    suspend fun moreLikeThis(label: String, seeds: List<String>, genres: List<String> = emptyList()): AskResult {
+        check(_asking.compareAndSet(null, "Asking Brainarr for more like $label…")) { "Brainarr is already working on it" }
+        try {
+            val (c, k) = require()
+            val main = brainarrLists().firstOrNull() ?: throw IOException("Lidarr has no Brainarr import list")
+            val styles = (seeds.filter { it.isNotBlank() }.distinct().take(6).map { "music like $it" } + genres.distinct().take(4)).take(10)
+            val body = WeeklyPicks.weeklyListBody(main.raw, MORE_LIKE_THIS_ALBUMS).let { base ->
+                val fields = (base["fields"] as JsonArray).filterNot { it.jsonObject["name"]?.jsonPrimitive?.content == "styleFilters" } +
+                    buildJsonObject {
+                        put("name", JsonPrimitive("styleFilters"))
+                        put("value", JsonArray(styles.map(::JsonPrimitive)))
+                    }
+                JsonObject(base + ("name" to JsonPrimitive(MORE_LIKE_THIS)) + ("fields" to JsonArray(fields)))
+            }
+            val existing = client.importLists(c, k).firstOrNull { (list, _) -> list.name == MORE_LIKE_THIS }
+            val id = if (existing != null) {
+                client.updateImportList(c, k, existing.first.id, JsonObject(body + ("id" to JsonPrimitive(existing.first.id))))
+                existing.first.id
+            } else {
+                if (WeeklyPicks.hasMaskedSecret(main.raw)) {
+                    client.createImportList(c, k, body)
+                    throw IOException("Enter your AI provider's API key once for “$MORE_LIKE_THIS” in Lidarr → Settings → Import Lists, then try again")
+                }
+                client.createImportList(c, k, body)["id"]!!.jsonPrimitive.int
+            }
+            val monitoredBefore = client.albums(c, k).filter { it.monitored }.map { it.id }.toSet()
+            val artistsBefore = client.artists(c, k).mapNotNull { it.foreignArtistId }.toSet()
+            client.setImportListAutomaticAdd(c, k, id, true)
+            val message = try {
+                runList(c, k, id)
+            } finally {
+                runCatching { client.setImportListAutomaticAdd(c, k, id, false) }
+            }
+            val artists = client.artists(c, k)
+            val names = artists.associate { it.id to it.artistName }
+            val added = client.albums(c, k).filter { it.monitored && it.id !in monitoredBefore }
+            val newArtists = artists.filter { it.foreignArtistId != null && it.foreignArtistId !in artistsBefore }
+            config.update { it.copy(brainarrRecorded = (it.brainarrRecorded + newArtists.mapNotNull { a -> a.foreignArtistId }).distinct()) }
+            return AskResult(added.map { "${it.title} (${names[it.artistId] ?: "?"})" }, message)
+        } finally {
+            _asking.value = null
+        }
+    }
+
+    /** Runs one import list and waits for it; returns Lidarr's message. */
+    private suspend fun runList(c: LidarrConfig, k: String, id: Int): String? {
+        var command = client.startCommand(c, k, "ImportListSync", "definitionId" to id)
+        val deadline = System.currentTimeMillis() + 15 * 60_000L
+        while (!command.finished && System.currentTimeMillis() < deadline) {
+            command.message?.let { _asking.value = it }
+            delay(2_000)
+            command = client.command(c, k, command.id)
+        }
+        if (!command.finished) throw IOException("Brainarr is still working; what it picks will show up when it's done")
+        if (command.status != "completed") throw IOException(command.message ?: "The Brainarr run ${command.status}")
+        return command.message
+    }
+
+    fun requireOrNull(): Pair<LidarrConfig, String>? = runCatching { require() }.getOrNull()
+
+    /** A "more like this" run that ended without switching its list off (the app quit): switch it off. */
+    suspend fun tidyLists() {
+        if (_asking.value != null) return
+        val (c, k) = require()
+        client.importLists(c, k).firstOrNull { (list, _) -> list.name == MORE_LIKE_THIS && list.enableAutomaticAdd }?.let { (list, _) ->
+            client.setImportListAutomaticAdd(c, k, list.id, false)
+        }
     }
 
     /** Runs every Brainarr list now and waits for it; see the phone's BrainarrService.ask. */
@@ -146,7 +225,9 @@ class DesktopLidarr(private val client: LidarrClient, private val api: SubsonicA
         client.monitorArtists(c, k, listOf(pick.lidarrId), c.monitor.takeIf { it != "none" } ?: "all", search = c.searchOnAdd)
     }
 
-    private companion object {
-        const val TAG = "brainarr"
+    companion object {
+        private const val TAG = "brainarr"
+        const val MORE_LIKE_THIS = "Tonearm more like this"
+        private const val MORE_LIKE_THIS_ALBUMS = 4
     }
 }
