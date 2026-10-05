@@ -13,7 +13,26 @@ submodule).
 
 ## Features
 
-- Library: home (recently added and played, most played, random), artists, albums, playlists, search
+- Library: home (recently added and played, most played, random), artists, albums, playlists, liked, search
+- **Likes**: hover a song and click the heart, or right-click it. Liking a YouTube Music song requests its
+  album in Lidarr and likes it in your library once it's downloaded. Playing alone requests nothing
+- **Playlists**: create, rename, delete, reorder, add from any song's menu or save the queue. Songs you don't
+  have yet can go in too: they play from YouTube Music and move into the playlist on your server once
+  Lidarr has them ("Request missing" asks for their albums)
+- **Import** playlists from YouTube Music / YouTube and Spotify links (Spotify: the first 100 songs), CSV
+  exports (Exportify, TuneMyMusic, Soundiiz…) and Spotify's own data export (Playlist1.json)
+- **More like this**: right-click a song, album, artist, playlist or Brainarr pick (or use the button on its
+  page) and Brainarr picks a few albums like it, which Lidarr gets
+- **Weekly picks**: a new Brainarr selection every week, downloaded into a playlist that's deleted a week
+  later (music included) unless you like it and give it a name; albums with liked songs stay either way
+- **YouTube Music artists and albums**: bios, popular songs, radio and the albums you don't have, playable
+  and requestable
+- **This computer**: music folders on the PC (FLAC, MP3, AAC, Opus, WAV…), played straight from disk
+- **Hi-res output and equalizer**: pick the output device (an `alsa/hw:` device or WASAPI exclusive mode
+  for bit-perfect playback at the file's own rate and depth; the player bar shows what reaches the device),
+  and a 10-band equalizer with presets and automatic headroom
+- **When the queue ends**: stop, similar music (library first, then YouTube Music's radio), or another playlist
+- Back/forward like a browser: the mouse's side buttons, Alt+← / Alt+→ or the arrows at the top
 - Playback through **libmpv**: bit-perfect FLAC up to 32-bit/384 kHz, gapless, ReplayGain, Opus/AAC.
   The queue lives in Tonearm (shuffle, repeat, play next, remove), mpv only holds the current and next
   song so it can prefetch the transition
@@ -26,6 +45,7 @@ submodule).
   Devices screen shows this player and controls it (play/pause, skip, seek, volume, shuffle, repeat,
   queue), and playback moves between phone and desktop
 - Scrobbles to the music server (now playing, and at half the song or 4 minutes)
+- Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
 - Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next, and the media keys while the window has focus
 - Passwords and API keys go to the desktop keyring (Secret Service: KWallet, GNOME Keyring) on Linux and
   are DPAPI-encrypted on Windows. Settings: `~/.config/tonearm` / `%APPDATA%\Tonearm`
