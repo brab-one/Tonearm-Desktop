@@ -15,7 +15,9 @@ submodule).
 
 - Library: home (recently added and played, most played, random), artists, albums, playlists, liked, search
 - **Likes**: hover a song and click the heart, or right-click it. Liking a YouTube Music song requests its
-  album in Lidarr and likes it in your library once it's downloaded. Playing alone requests nothing
+  album in Lidarr and likes it in your library once it's downloaded. Playing alone requests nothing. Likes of
+  songs you don't have yet are shared with the phone through the Tonearm Connect plugin (1.1+), and such
+  songs show whether they're in your library, downloading in Lidarr or requested
 - **Playlists**: create, rename, delete, reorder, add from any song's menu or save the queue. Songs you don't
   have yet can go in too: they play from YouTube Music and move into the playlist on your server once
   Lidarr has them ("Request missing" asks for their albums)
