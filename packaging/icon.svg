@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="10 10 88 88">
+<rect x="10" y="10" width="88" height="88" rx="18" fill="#05070D"/>
+<path d="M28,56a26,26 0,1 0,52 0a26,26 0,1 0,-52 0z" fill="#000000" fill-opacity="0.000" stroke="#00E5FF" stroke-opacity="0.200" stroke-width="7"/>
+<path d="M28,56a26,26 0,1 0,52 0a26,26 0,1 0,-52 0z" fill="#0A1222" fill-opacity="1.000"/>
+<path d="M28,56a26,26 0,1 0,52 0a26,26 0,1 0,-52 0z" fill="#000000" fill-opacity="0.000" stroke="#00E5FF" stroke-opacity="1.000" stroke-width="2.2"/>
+<path d="M34,56a20,20 0,1 0,40 0a20,20 0,1 0,-40 0z" fill="#000000" fill-opacity="0.000" stroke="#00E5FF" stroke-opacity="0.400" stroke-width="1"/>
+<path d="M39,56a15,15 0,1 0,30 0a15,15 0,1 0,-30 0z" fill="#000000" fill-opacity="0.000" stroke="#00E5FF" stroke-opacity="0.267" stroke-width="1"/>
+<path d="M46.5,56a7.5,7.5 0,1 0,15 0a7.5,7.5 0,1 0,-15 0z" fill="#FF2BD6" fill-opacity="1.000"/>
+<path d="M52.6,56a1.4,1.4 0,1 0,2.8 0a1.4,1.4 0,1 0,-2.8 0z" fill="#05070D" fill-opacity="1.000"/>
+<path d="M79,30L75,47L63,60" fill="#000000" fill-opacity="0.000" stroke="#00E5FF" stroke-opacity="0.333" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M79,30L75,47L63,60" fill="#000000" fill-opacity="0.000" stroke="#E6F1FF" stroke-opacity="1.000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M74.5,30a4.5,4.5 0,1 0,9 0a4.5,4.5 0,1 0,-9 0z" fill="#00E5FF" fill-opacity="1.000"/>
+<path d="M59.4,58.4l4.4,-4.2l3.2,3.4l-4.4,4.2z" fill="#E6F1FF" fill-opacity="1.000"/>
+</svg>

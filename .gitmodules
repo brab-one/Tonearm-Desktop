@@ -1,0 +1,3 @@
+[submodule "tonearm"]
+	path = tonearm
+	url = https://github.com/brab-one/Tonearm.git

@@ -1,0 +1,4 @@
+build/
+.gradle/
+.kotlin/
+packaging/resources/windows/*.dll
