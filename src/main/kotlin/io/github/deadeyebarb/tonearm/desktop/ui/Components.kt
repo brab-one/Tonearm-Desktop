@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
+import io.github.deadeyebarb.tonearm.integrations.Fetch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -216,6 +217,8 @@ fun SongRow(
     extraMenu: List<MenuEntry> = emptyList(),
     /** A tag instead of the quality one, e.g. for a playlist placeholder. */
     tag: String? = null,
+    /** For a song not in the library: the album (and artist) Lidarr was asked for, to show its progress. */
+    requested: Pair<String, String>? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     val hud = Hud.colors
@@ -226,6 +229,7 @@ fun SongRow(
     val liked by app.likes.liked.collectAsState()
     val isLiked = io.github.deadeyebarb.tonearm.desktop.DesktopLikes.key(song.source, song.id) in liked
     val menu = { songMenu(app, nav, ui, song, extraMenu) }
+    val fetch = rememberFetchState(app, song, requested)
     MenuArea(menu) {
     Row(
         modifier.fillMaxWidth()
@@ -252,6 +256,7 @@ fun SongRow(
             Text(listOfNotNull(song.artist, song.album).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         when {
+            fetch != null -> HudTag(fetch.label(), color = if (fetch.fetch == Fetch.IN_LIBRARY) hud.ok else hud.accent)
             tag != null -> HudTag(tag, color = hud.accent2)
             song.source == ConnectSong.YOUTUBE -> HudTag("YouTube Music", color = hud.accent2)
             isHiRes(song) -> HudTag("Hi-Res")

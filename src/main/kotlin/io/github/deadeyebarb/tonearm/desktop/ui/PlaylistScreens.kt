@@ -257,6 +257,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                             app, song, number = i + 1, playing = state.current?.let { it.id == song.id && it.source == song.source } == true,
                             onPlay = { playFrom(i) }, showCover = false,
                             tag = if (item.track.request != null) "Requested" else "Not downloaded",
+                            requested = item.track.requestedAlbum?.let { it to (item.track.requestedArtist ?: ref.artist) },
                             extraMenu = listOf(
                                 MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removePending(id, item.track) } } },
                             ),

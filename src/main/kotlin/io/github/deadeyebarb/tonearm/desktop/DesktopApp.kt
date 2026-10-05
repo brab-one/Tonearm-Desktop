@@ -1,11 +1,13 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import java.io.File
 import kotlinx.coroutines.delay
 import io.github.deadeyebarb.tonearm.youtube.YouTubeCatalog
 import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
+import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.integrations.PlaylistSources
 import io.github.deadeyebarb.tonearm.integrations.MusicBrainz
 import io.github.deadeyebarb.tonearm.integrations.Continuation
@@ -47,7 +49,7 @@ class DesktopApp {
     val config = ConfigStore(json)
 
     init {
-        USER_AGENT = "Tonearm/1.1 (Desktop)"
+        USER_AGENT = "Tonearm/1.2 (Desktop)"
     }
 
     val baseClient: OkHttpClient = OkHttpClient.Builder()
@@ -73,19 +75,28 @@ class DesktopApp {
     }
 
     val catalog = YouTubeCatalog(youtube)
+    val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseClient, json))
     val sources = PlaylistSources(youtubeClient, youtube)
     private val continuation = Continuation(api, youtube)
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
     val connect = DesktopConnect(config, ConnectClient(integrationHttp, json), player, scope).also { it.start() }
-    val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, json, AppDirs.config, ::message).also { it.start() }
+    val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(ConnectClient(integrationHttp, json), json), json, AppDirs.config, ::message)
+        .also { it.start() }
     val playlists = DesktopPlaylists(scope, api, sessions, youtube, lidarr, songRequests, json, File(AppDirs.config, "playlist-placeholders.json"), ::message)
         .also { it.start() }
     val local = LocalLibrary(json, config, AppDirs.cache).also { it.start(scope) }
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, config.state.value.deviceId, File(AppDirs.config, "weekly-run.json"))
 
     init {
+        // Lidarr's queue and wanted list, for the status tags on songs from outside the library.
+        scope.launch {
+            while (true) {
+                lidarr.requireOrNull()?.let { (c, k) -> runCatching { fetches.refresh(c, k) } }
+                delay(60_000L)
+            }
+        }
         // Brainarr's weekly picks: check now and then, more often while a run is under way.
         scope.launch {
             while (true) {

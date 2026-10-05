@@ -4,7 +4,9 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.likes.PendingLikes
+import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
@@ -35,6 +37,7 @@ class DesktopLikes(
     private val config: ConfigStore,
     private val lidarr: DesktopLidarr,
     private val requests: SongRequests,
+    private val sync: LikesSync,
     private val json: Json,
     dir: File,
     private val message: (String) -> Unit,
@@ -65,9 +68,14 @@ class DesktopLikes(
             }
             ConnectSong.YOUTUBE -> {
                 val ref = TrackRef(song.title, song.artist.orEmpty(), song.album, song.duration, youtubeId = song.id, coverUrl = song.coverArt)
-                if (!like) return pending.remove(ref)
+                if (!like) {
+                    pending.remove(ref)
+                    syncSoon()
+                    return
+                }
                 pending.add(ref)
                 if (resolveNow().isNotEmpty()) return
+                syncSoon()
                 request(ref)
             }
         }
@@ -79,7 +87,9 @@ class DesktopLikes(
             try {
                 val (c, k) = lidarr.require()
                 val result = requests.request(c, k, ref)
-                pending.setRequest(ref, result.message)
+                val album = result as? SongRequestResult.Album
+                pending.setRequest(ref, result.message, album?.title, album?.artist)
+                syncNow()
                 message(result.message)
             } catch (e: Exception) {
                 message("Couldn't request ${ref.title}: ${e.userMessage()}")
@@ -98,18 +108,31 @@ class DesktopLikes(
         val session = sessions.current() ?: return emptyList()
         val found = runCatching { pending.resolve(api, session) }.getOrDefault(emptyList())
         server.update { it + found.map { s -> s.id } }
+        if (found.isNotEmpty()) syncSoon()
         if (found.isNotEmpty()) message(if (found.size == 1) "${found[0].title} is in your library now" else "${found.size} liked songs are in your library now")
         found.map { it.id }
     }
 
+    /** Shares pending likes with the phone through Lidarr (Tonearm Connect); false if that isn't possible. */
+    suspend fun syncNow(): Boolean {
+        val (c, k) = lidarr.requireOrNull() ?: return false
+        return runCatching { sync.sync(c, k, pending) }.getOrDefault(false)
+    }
+
+    private fun syncSoon() {
+        scope.launch { syncNow() }
+    }
+
     fun start() {
         scope.launch {
+            var round = 0
             while (true) {
-                if (sessions.current() != null) {
+                syncNow()
+                if (sessions.current() != null && round++ % 5 == 0) {
                     runCatching { refresh() }
                     runCatching { resolveNow() }
                 }
-                delay(20 * 60_000L)
+                delay(4 * 60_000L)
             }
         }
     }

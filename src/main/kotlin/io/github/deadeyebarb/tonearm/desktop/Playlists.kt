@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.integrations.ImportedPlaylist
@@ -42,6 +43,9 @@ data class PendingTrack(
     val added: Long = System.currentTimeMillis(),
     /** What a request in Lidarr did, once requested. */
     val request: String? = null,
+    /** The album Lidarr was asked for, to follow its download. */
+    val requestedAlbum: String? = null,
+    val requestedArtist: String? = null,
 )
 
 /** A row of a playlist: a library song (at [index] in the server's playlist) or a placeholder. */
@@ -207,10 +211,14 @@ class DesktopPlaylists(
         val (c, k) = lidarr.require()
         var count = 0
         for (track in _pending.value[playlistId].orEmpty().filter { it.request == null }) {
-            val result = runCatching { requests.request(c, k, track.ref).message }.getOrElse { "Not requested: ${it.message}" }
+            val result = runCatching { requests.request(c, k, track.ref) }
+            val message = result.map { it.message }.getOrElse { "Not requested: ${it.message}" }
+            val album = result.getOrNull() as? SongRequestResult.Album
             lock.withLock {
                 val map = _pending.value.toMutableMap()
-                map[playlistId] = map[playlistId].orEmpty().map { if (it == track) it.copy(request = result) else it }
+                map[playlistId] = map[playlistId].orEmpty().map {
+                    if (it == track) it.copy(request = message, requestedAlbum = album?.title, requestedArtist = album?.artist) else it
+                }
                 save(map)
             }
             count++

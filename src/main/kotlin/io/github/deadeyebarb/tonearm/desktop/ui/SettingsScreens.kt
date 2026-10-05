@@ -154,7 +154,7 @@ fun SettingsScreen(app: DesktopApp) {
             )
 
             SectionHeader("About")
-            Text("Tonearm desktop 1.1.0 · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
+            Text("Tonearm desktop 1.2.0 · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
         }
     }
 }

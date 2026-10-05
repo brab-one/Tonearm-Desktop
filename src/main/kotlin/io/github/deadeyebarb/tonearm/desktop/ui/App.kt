@@ -310,6 +310,7 @@ private fun PlayerBar(app: DesktopApp, onQueue: () -> Unit, queueOpen: Boolean) 
                     Text(song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(qualityLine(song, state), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1)
                     outputLine(state)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1) }
+                    rememberFetchState(app, song)?.let { Text(it.label().uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent, maxLines = 1) }
                 }
                 Spacer(Modifier.width(4.dp))
                 LikeButton(app, song)

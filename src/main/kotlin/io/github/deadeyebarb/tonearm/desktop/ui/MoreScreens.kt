@@ -120,6 +120,7 @@ fun LikedScreen(app: DesktopApp, nav: Navigator) {
     val pending by app.likes.pending.items.collectAsState()
     val localTracks by app.local.tracks.collectAsState()
     val loader = rememberLoad(app.config.state.value.server?.baseUrl, liked.size) {
+        app.likes.syncNow()
         runCatching { app.likes.resolveNow() }
         app.likes.refresh()
         app.api.starred().song.map { it.toConnectSong() }
