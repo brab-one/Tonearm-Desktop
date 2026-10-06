@@ -4,12 +4,14 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.likes.PendingLikes
 import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
 import io.github.deadeyebarb.tonearm.subsonic.StarKind
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,8 @@ class DesktopLikes(
     private val lidarr: DesktopLidarr,
     private val requests: SongRequests,
     private val sync: LikesSync,
+    /** Where Tonearm Connect runs (see DesktopConnect.route). */
+    private val route: suspend () -> ConnectRoute,
     private val json: Json,
     dir: File,
     private val message: (String) -> Unit,
@@ -113,10 +117,13 @@ class DesktopLikes(
         found.map { it.id }
     }
 
-    /** Shares pending likes with the phone through Lidarr (Tonearm Connect); false if that isn't possible. */
-    suspend fun syncNow(): Boolean {
-        val (c, k) = lidarr.requireOrNull() ?: return false
-        return runCatching { sync.sync(c, k, pending) }.getOrDefault(false)
+    /** Shares pending likes with the phone through Tonearm Connect; false if that isn't possible. */
+    suspend fun syncNow(): Boolean = try {
+        sync.sync(route(), pending)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
     }
 
     private fun syncSoon() {

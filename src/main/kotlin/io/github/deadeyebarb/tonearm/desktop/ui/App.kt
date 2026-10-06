@@ -280,7 +280,7 @@ private fun Rail(app: DesktopApp, nav: Navigator) {
         Spacer(Modifier.weight(1f))
         Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             val (color, label) = when (val s = connect) {
-                DesktopConnect.Status.Online -> hud.ok to "CONNECT ONLINE"
+                is DesktopConnect.Status.Online -> hud.ok to "CONNECT ONLINE"
                 DesktopConnect.Status.Connecting -> hud.accent to "CONNECTING…"
                 DesktopConnect.Status.Off -> hud.dim to "CONNECT OFF"
                 is DesktopConnect.Status.Failed -> hud.danger to "CONNECT ERROR"

@@ -4,10 +4,14 @@ import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
 import io.github.deadeyebarb.tonearm.connect.ConnectPluginMissingException
+import io.github.deadeyebarb.tonearm.connect.ConnectRoute
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
+import io.github.deadeyebarb.tonearm.connect.ConnectUnavailableException
 import io.github.deadeyebarb.tonearm.connect.DeviceState
 import io.github.deadeyebarb.tonearm.connect.PlaybackState
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
-import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
+import io.github.deadeyebarb.tonearm.desktop.DesktopLidarr
+import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
@@ -26,25 +30,33 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Makes this player visible to the phone through the Tonearm Connect plugin in Lidarr: announces
- * what it plays, and long-polls for the phone's commands (play, skip, seek, volume, take a queue…).
+ * Makes this player visible to the phone through Tonearm Connect (the Tonearm server next to the music
+ * server, or the plugin in Lidarr): announces what it plays, and long-polls for the phone's commands
+ * (play, skip, seek, volume, take a queue…).
  */
 class DesktopConnect(
     private val config: ConfigStore,
     private val client: ConnectClient,
+    private val sessions: DesktopSessions,
+    private val lidarr: DesktopLidarr,
     private val player: DesktopPlayer,
     private val scope: CoroutineScope,
 ) {
     sealed interface Status {
         data object Off : Status
         data object Connecting : Status
-        data object Online : Status
+        /** [server]: through the Tonearm server rather than Lidarr. */
+        data class Online(val server: Boolean) : Status
         data class Failed(val message: String) : Status
     }
 
     private val _status = MutableStateFlow<Status>(Status.Off)
     val status: StateFlow<Status> = _status.asStateFlow()
-    private var after = 0L
+    private val router = ConnectRouter(client)
+    /** Where the last poll went; publishing and goodbyes go the same way. */
+    @Volatile private var route: ConnectRoute? = null
+    /** The last command seen; null until the first poll on a route, which skips what was queued before. */
+    private var after: Long? = null
     /** Where the queue window sent to the phone starts; its indexes are relative to it. */
     @Volatile private var windowFrom = 0
 
@@ -61,25 +73,36 @@ class DesktopConnect(
         }
     }
 
+    /** The Tonearm server when the music server has one, else the plugin in Lidarr. */
+    suspend fun route(): ConnectRoute = router.route(sessions.current()) { lidarr.requireOrNull() }
+
     private suspend fun pollLoop() {
         while (true) {
             val cfg = config.state.value
-            val lidarr = cfg.lidarr
-            if (!cfg.connect || lidarr == null) {
+            if (!cfg.connect) {
+                route = null
                 _status.value = Status.Off
                 delay(3_000)
                 continue
             }
             try {
                 if (_status.value !is Status.Online) _status.value = Status.Connecting
+                val next = route()
+                if (next != route) after = null
+                route = next
                 publish()
-                val (commands, seq) = client.poll(lidarr, SecretStore.open(lidarr.keyEnc), cfg.deviceId, after, ConnectClient.POLL_WAIT_SECONDS)
+                // Commands queued while this player wasn't listening are old news.
+                val from = after ?: client.poll(next, cfg.deviceId, 0, 0).second
+                val (commands, seq) = client.poll(next, cfg.deviceId, from, ConnectClient.POLL_WAIT_SECONDS)
                 after = seq
-                _status.value = Status.Online
+                _status.value = Status.Online(next is ConnectRoute.Server)
                 commands.forEach { apply(it.command) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ConnectPluginMissingException) {
+                _status.value = Status.Failed(e.message.orEmpty())
+                delay(30_000)
+            } catch (e: ConnectUnavailableException) {
                 _status.value = Status.Failed(e.message.orEmpty())
                 delay(30_000)
             } catch (e: Exception) {
@@ -90,10 +113,9 @@ class DesktopConnect(
     }
 
     private suspend fun publish() {
-        val cfg = config.state.value
-        val lidarr = cfg.lidarr ?: return
-        if (!cfg.connect) return
-        client.publish(lidarr, SecretStore.open(lidarr.keyEnc), deviceState())
+        val route = route ?: return
+        if (!config.state.value.connect) return
+        client.publish(route, deviceState())
     }
 
     private fun deviceState(): DeviceState {
@@ -127,11 +149,10 @@ class DesktopConnect(
         }
     }
 
-    /** Tells the plugin this device is gone (on exit), so the phone doesn't list it as online. */
+    /** Says this device is gone (on exit), so the phone doesn't list it as online. */
     fun goodbye() {
-        val cfg = config.state.value
-        val lidarr = cfg.lidarr ?: return
-        runBlocking { withTimeoutOrNull(2_000) { runCatching { client.forget(lidarr, SecretStore.open(lidarr.keyEnc), cfg.deviceId) } } }
+        val route = route ?: return
+        runBlocking { withTimeoutOrNull(2_000) { runCatching { client.forget(route, config.state.value.deviceId) } } }
     }
 
     companion object {

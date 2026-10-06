@@ -81,8 +81,9 @@ class DesktopApp {
     private val continuation = Continuation(api, youtube)
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
-    val connect = DesktopConnect(config, ConnectClient(integrationHttp, json), player, scope).also { it.start() }
-    val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(ConnectClient(integrationHttp, json), json), json, AppDirs.config, ::message)
+    private val connectClient = ConnectClient(integrationHttp, json)
+    val connect = DesktopConnect(config, connectClient, sessions, lidarr, player, scope).also { it.start() }
+    val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(connectClient, json), connect::route, json, AppDirs.config, ::message)
         .also { it.start() }
     val playlists = DesktopPlaylists(scope, api, sessions, youtube, lidarr, songRequests, json, File(AppDirs.config, "playlist-placeholders.json"), ::message)
         .also { it.start() }

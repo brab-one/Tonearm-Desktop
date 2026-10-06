@@ -16,7 +16,7 @@ submodule).
 - Library: home (recently added and played, most played, random), artists, albums, playlists, liked, search
 - **Likes**: hover a song and click the heart, or right-click it. Liking a YouTube Music song requests its
   album in Lidarr and likes it in your library once it's downloaded. Playing alone requests nothing. Likes of
-  songs you don't have yet are shared with the phone through the Tonearm Connect plugin (1.1+), and such
+  songs you don't have yet are shared with the phone through Tonearm Connect, and such
   songs show whether they're in your library, downloading in Lidarr or requested
 - **Playlists**: create, rename, delete, reorder, add from any song's menu or save the queue. Songs you don't
   have yet can go in too: they play from YouTube Music and move into the playlist on your server once
@@ -44,7 +44,8 @@ submodule).
 - **Lidarr**: request artists and albums, follow the downloads
 - **Brainarr**: its picks with library/download status, Ask Brainarr, Get, labelling its picks, Play picks
 - **YouTube Music** for what you don't have (in search), with the artist requested in Lidarr when it plays
-- **Tonearm Connect**: with the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr, the phone's
+- **Tonearm Connect**: with the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your
+  Navidrome (or the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr), the phone's
   Devices screen shows this player and controls it (play/pause, skip, seek, volume, shuffle, repeat,
   queue), and playback moves between phone and desktop
 - Scrobbles to the music server (now playing, and at half the song or 4 minutes)
@@ -77,8 +78,10 @@ On first start, enter the server address, your username and password, and, for m
 client certificate as on the phone. Lidarr goes under Settings (address and API key; use the music
 server's client certificate if Lidarr sits behind the same proxy).
 
-For Tonearm Connect, install the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr and use
-the same music server address as on the phone (song ids are per server).
+For Tonearm Connect, run the [Tonearm server](https://github.com/brab-one/Tonearm-Server) at
+`<music server>/connect-tonearm/` (the app finds it; it serves every user with their own login), or install
+the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr. Use the same music server address as on
+the phone (song ids are per server).
 
 ## Build
 

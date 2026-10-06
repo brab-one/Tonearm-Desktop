@@ -135,18 +135,19 @@ fun SettingsScreen(app: DesktopApp) {
 
             SectionHeader("Tonearm Connect")
             Text(
-                "Lets the Tonearm app on your phone see and control this player, through the Tonearm Connect plugin in Lidarr.",
+                "Lets the Tonearm app on your phone see and control this player, through the Tonearm server next to your music server, or the Tonearm Connect plugin in Lidarr.",
                 style = MaterialTheme.typography.bodyMedium, color = hud.dim,
             )
-            Toggle("Show this player on the phone", "Needs Lidarr and its Tonearm Connect plugin.", config.connect) { v -> app.config.update { it.copy(connect = v) } }
+            Toggle("Show this player on the phone", "Needs the Tonearm server, or Lidarr with its Tonearm Connect plugin.", config.connect) { v -> app.config.update { it.copy(connect = v) } }
             var name by remember(config.deviceName) { mutableStateOf(config.deviceName) }
             Field(name, { name = it; app.config.update { c -> c.copy(deviceName = it.ifBlank { c.deviceName }) } }, "Name shown on the phone")
             val status by app.connect.status.collectAsState()
             Text(
                 when (val s = status) {
-                    DesktopConnect.Status.Online -> "✓ Online: the phone can see this player."
+                    is DesktopConnect.Status.Online ->
+                        "✓ Online through " + (if (s.server) "the Tonearm server" else "Lidarr") + ": the phone can see this player."
                     DesktopConnect.Status.Connecting -> "Connecting…"
-                    DesktopConnect.Status.Off -> if (config.lidarr == null) "Off: connect Lidarr first." else "Off."
+                    DesktopConnect.Status.Off -> "Off."
                     is DesktopConnect.Status.Failed -> s.message
                 },
                 style = MaterialTheme.typography.bodyMedium, color = if (status is DesktopConnect.Status.Failed) hud.danger else hud.text,
@@ -238,7 +239,7 @@ private fun LidarrForm(app: DesktopApp, existing: LidarrConfig?) {
     var useServerTls by remember(existing) { mutableStateOf(existing?.useServerTls ?: true) }
     var test by remember { mutableStateOf<TestState>(TestState.Idle) }
     Text(
-        "Requests, downloads, Brainarr's picks, and the relay for controlling this player from the phone.",
+        "Requests, downloads and Brainarr's picks; also Tonearm Connect's relay when there's no Tonearm server.",
         style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
     )
     Field(url, { url = it }, "Lidarr address", "https://lidarr.example.com", KeyboardType.Uri)
