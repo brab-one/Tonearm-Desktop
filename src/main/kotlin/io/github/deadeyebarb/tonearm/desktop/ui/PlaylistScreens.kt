@@ -121,7 +121,7 @@ private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: Strin
             app.scope.launch { app.attempt { app.playlists.rename(id, new); changed() } }
         }
     },
-    MenuEntry("More like this") { app.scope.launch { app.attempt { moreLikePlaylist(app, id, name) } } },
+    MenuEntry("More like this") { app.scope.launch { app.attempt { moreLikePlaylist(app, nav, id, name) } } },
     MenuEntry("Delete") {
         ui.prompt = Prompt("Delete “$name”?", "Type the name to confirm", "", "Delete") { typed ->
             if (typed == name) app.scope.launch { app.attempt { app.playlists.delete(id); changed(); if (nav.current == Screen.Playlist(id)) nav.back() } }
@@ -130,11 +130,13 @@ private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: Strin
     },
 )
 
-private suspend fun moreLikePlaylist(app: DesktopApp, id: String, name: String) {
+/** "More like this" for a playlist: its most frequent artist and a song of theirs, and the whole mix described to the AI. */
+private suspend fun moreLikePlaylist(app: DesktopApp, nav: Navigator, id: String, name: String) {
     val playlist = app.api.playlist(id)
     val artists = playlist.entry.mapNotNull { it.artist }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(6)
     val genres = playlist.entry.mapNotNull { it.genre }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(3)
-    app.moreLikeThis("the playlist “$name” (${(artists + genres).joinToString()})")
+    val song = playlist.entry.firstOrNull { it.artist == artists.firstOrNull() }?.toConnectSong()
+    nav.go(Screen.MoreLike(MoreLikeSeed("“$name”", artists.firstOrNull(), song, aiSeed = "the playlist “$name” (${(artists + genres).joinToString()})")))
 }
 
 @Composable
@@ -211,9 +213,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                     }
                                 }, icon = Icons.Rounded.CloudDownload, filled = false)
                             }
-                            if (app.lidarr.current.value != null) {
-                                HudButton("More like this", { scope.launch { app.attempt { moreLikePlaylist(app, id, playlist.name) } } }, icon = Icons.Rounded.AutoAwesome, filled = false)
-                            }
+                            HudButton("More like this", { scope.launch { app.attempt { moreLikePlaylist(app, nav, id, playlist.name) } } }, icon = Icons.Rounded.AutoAwesome, filled = false)
                             MoreButton({ playlistMenu(app, nav, ui, id, playlist.name) { refresh++ } }, 40.dp)
                         }
                     }

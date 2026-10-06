@@ -140,9 +140,9 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
             }
         })
     }
-    if (app.canAskMoreLike) {
-        add(MenuEntry("More like this") { app.moreLikeThis("the song “${song.title}”" + (song.artist?.let { " by $it" } ?: "")) })
-    }
+    add(MenuEntry("More like this") {
+        nav.go(Screen.MoreLike(MoreLikeSeed("“${song.title}”", song.artist, song, aiSeed = "the song “${song.title}”" + (song.artist?.let { " by $it" } ?: ""))))
+    })
     when (song.source) {
         ConnectSong.SERVER -> {
             song.albumId?.let { add(MenuEntry("Go to album") { nav.go(Screen.Album(it)) }) }

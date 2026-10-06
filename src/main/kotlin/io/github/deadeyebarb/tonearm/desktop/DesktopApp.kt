@@ -1,5 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.connect.SimilarArtist
+import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
 import io.github.deadeyebarb.tonearm.connect.AiPicks
 import kotlinx.coroutines.flow.map
@@ -145,6 +147,36 @@ class DesktopApp {
                 delay(2 * 60_000L)
             }
         }
+    }
+
+    /** Artists you don't have that yours point to, from the Tonearm server (null without its discovery). */
+    suspend fun discover(refresh: Boolean = false): DiscoveryPicks? {
+        val session = sessions.current() ?: return null
+        if (tonearmServer.refresh(session)?.discovery != true) return null
+        return connectClient.discover(session, refresh)
+    }
+
+    /**
+     * Artists like [artist]: from the Tonearm server (Deezer's related artists, marked when you have them),
+     * else the music server's own similar artists of [libraryId].
+     */
+    suspend fun similarArtists(artist: String, libraryId: String?): List<SimilarArtist> {
+        val session = sessions.current() ?: return emptyList()
+        if (tonearmServer.refresh(session)?.discovery == true) return connectClient.similarArtists(session, artist)
+        return libraryId?.let { api.artistInfo(it, includeNotPresent = true) }?.similarArtist.orEmpty()
+            .map { SimilarArtist(it.name, inLibrary = it.inLibrary) }
+    }
+
+    /**
+     * Songs like [song] (or, without one, like [artist]'s best-known song on YouTube Music): the library's
+     * similar songs, then YouTube Music's radio with library copies swapped in.
+     */
+    suspend fun similarSongs(song: ConnectSong?, artist: String?): List<ConnectSong> {
+        val cfg = config.state.value
+        val seed = song ?: artist?.let { name -> youtube.artistSongs(name, 1).firstOrNull()?.toConnectSong(ConnectSong.YOUTUBE) } ?: return emptyList()
+        val last = Song(id = seed.id, title = seed.title, artist = seed.artist, album = seed.album, duration = seed.duration)
+        val next = continuation.similar(last, seed.source == ConnectSong.YOUTUBE, sessions.current(), setOf(Continuation.key(seed.id, seed.source == ConnectSong.YOUTUBE)), cfg.playYouTube)
+        return listOf(seed) + next.map { if (it.youtube) it.song.toConnectSong(ConnectSong.YOUTUBE) else it.song.toConnectSong() }
     }
 
     /** "When the queue ends": more of the same, or another playlist. */

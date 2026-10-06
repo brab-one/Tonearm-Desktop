@@ -23,9 +23,10 @@ submodule).
   Lidarr has them ("Request missing" asks for their albums)
 - **Import** playlists from YouTube Music / YouTube and Spotify links (Spotify: the first 100 songs), CSV
   exports (Exportify, TuneMyMusic, Soundiiz…) and Spotify's own data export (Playlist1.json)
-- **More like this**: right-click a song, album, artist or playlist (or use the button on its page) and the
-  Tonearm server's AI suggests albums like it, shown under AI picks
-- **Weekly picks** (AI picks screen): the first few AI picks downloaded every week into a playlist that's
+- **More like this**: right-click a song, album, artist or playlist (or use the button on its page) for a
+  page of similar artists (in your library or not; right-click to request), **Play similar songs** (the
+  server's similar songs, else YouTube Music's radio) and, with the Tonearm server's AI, albums like it
+- **Weekly picks** (Discover screen): the first few AI picks downloaded every week into a playlist that's
   deleted a week later (music included) unless you like it and give it a name; albums with liked songs stay
   either way
 - **YouTube Music artists and albums**: bios, popular songs, radio and the albums you don't have, playable
@@ -43,8 +44,9 @@ submodule).
 - mTLS like the phone: a `.p12` client certificate and an optional extra CA. A loopback-only proxy with a
   random path token feeds mpv, so mpv never sees credentials or the certificate
 - **Lidarr**: request artists and albums, follow the downloads
-- **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
-  and like, on their own screen and at the bottom of Home; open one on YouTube Music or request it
+- **Discover** (with the Tonearm server): discovery picks (artists you don't have that yours point to, from
+  Deezer's related artists, each with an album) and AI picks (from your Ollama); open one on YouTube Music
+  or request it
 - **YouTube Music** for what you don't have (in search), with the artist requested in Lidarr when it plays
 - **Tonearm Connect**: with the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your
   Navidrome (or the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr), the phone's

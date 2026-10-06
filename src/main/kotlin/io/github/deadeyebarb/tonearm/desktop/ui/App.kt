@@ -103,7 +103,8 @@ sealed interface Screen {
     data class YouTubeArtist(val artist: YtArtist) : Screen
     data class YouTubeAlbum(val album: YtAlbum) : Screen
     data object Lidarr : Screen
-    data object AiPicks : Screen
+    data object Discover : Screen
+    data class MoreLike(val like: MoreLikeSeed) : Screen
     data object Settings : Screen
 }
 
@@ -160,7 +161,7 @@ private val railItems = listOf(
     RailItem(Screen.Playlists, "Playlists", Icons.Rounded.LibraryMusic),
     RailItem(Screen.Local, "This computer", Icons.Rounded.Computer),
     RailItem(Screen.Lidarr, "Lidarr", Icons.Rounded.CloudDownload),
-    RailItem(Screen.AiPicks, "AI picks", Icons.Rounded.AutoAwesome),
+    RailItem(Screen.Discover, "Discover", Icons.Rounded.AutoAwesome),
     RailItem(Screen.Settings, "Settings", Icons.Rounded.Settings),
 )
 
@@ -240,7 +241,8 @@ private fun ScreenContent(app: DesktopApp, nav: Navigator, screen: Screen) {
         is Screen.YouTubeArtist -> YouTubeArtistScreen(app, nav, screen.artist)
         is Screen.YouTubeAlbum -> YouTubeAlbumScreen(app, nav, screen.album)
         Screen.Lidarr -> LidarrScreen(app, nav)
-        Screen.AiPicks -> AiPicksScreen(app, nav)
+        Screen.Discover -> DiscoverScreen(app, nav)
+        is Screen.MoreLike -> MoreLikeScreen(app, nav, screen.like)
         Screen.Settings -> SettingsScreen(app)
     }
 }

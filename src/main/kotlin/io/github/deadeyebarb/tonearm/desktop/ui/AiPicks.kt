@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
+import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
@@ -97,20 +99,93 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
     }
 }
 
-/** The "AI picks" screen: the picks, and weekly picks for Navidrome admins with Lidarr. */
+/**
+ * The Discover screen: discovery picks (artists yours point to), AI picks, and weekly picks for Navidrome
+ * admins with Lidarr. Both kinds of picks come from the Tonearm server.
+ */
 @Composable
-fun AiPicksScreen(app: DesktopApp, nav: Navigator) {
+fun DiscoverScreen(app: DesktopApp, nav: Navigator) {
     val server by app.tonearmServer.server.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp)) {
-        ScreenTitle("AI picks", "ALBUMS BY ARTISTS YOU DON'T HAVE, FROM WHAT YOU PLAY")
-        if (server?.recommendations == true) {
-            AiPicksSection(app, nav, full = true)
-        } else {
+        ScreenTitle("Discover", "ARTISTS AND ALBUMS YOU DON'T HAVE, FROM WHAT YOU PLAY")
+        if (server?.discovery == true) DiscoveryPicksSection(app, nav)
+        if (server?.recommendations == true) AiPicksSection(app, nav, full = true)
+        if (server?.discovery != true && server?.recommendations != true) {
             Text(
-                "AI picks come from the Tonearm server on your music server, once it has Ollama (OLLAMA_URL). " +
-                    "Its README has the setup.",
+                "Discovery and AI picks come from the Tonearm server on your music server (AI picks once it has Ollama, " +
+                    "OLLAMA_URL). Its README has the setup. Right-click anything for More like this in the meantime.",
                 style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim, modifier = Modifier.padding(top = 12.dp),
             )
+        }
+    }
+}
+
+/** Artists you don't have that the artists you play point to (Deezer's related artists), with an album each. */
+@Composable
+private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
+    val scope = rememberCoroutineScope()
+    val lidarr by app.lidarr.current.collectAsState()
+    val config by app.config.state.collectAsState()
+    var asks by remember { mutableIntStateOf(0) }
+    var picks by remember { mutableStateOf<DiscoveryPicks?>(null) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(asks) {
+        try {
+            picks = app.discover(refresh = asks > 0)
+            failed = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed = e.userMessage()
+        }
+    }
+    val hud = Hud.colors
+    val current = picks
+    Column(Modifier.padding(bottom = 16.dp)) {
+        SectionHeader("Discovery picks") { if (current != null) HudButton("Refresh", { asks++ }, filled = false) }
+        Text(
+            when {
+                current == null && failed == null -> "Looking at what you play…"
+                current?.picks.isNullOrEmpty() -> "Nothing yet: play and like some music, and artists like it show up here."
+                else -> "Artists you don't have that the ones you play point to, with an album to start with."
+            },
+            style = MaterialTheme.typography.bodyMedium, color = hud.dim,
+        )
+        (failed ?: current?.problem)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
+        current?.picks?.forEach { pick ->
+            Row(Modifier.fillMaxWidth().widthIn(max = 900.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Cover(app, pick.coverUrl ?: pick.imageUrl, Modifier.size(56.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(pick.album ?: pick.artist, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(pick.artist + (pick.year?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium, color = hud.accent2, maxLines = 1)
+                    if (pick.because.isNotEmpty()) Text("Because you play " + pick.because.joinToString(" and "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1)
+                }
+                HudButton("More like it", { nav.go(Screen.MoreLike(MoreLikeSeed(pick.artist, pick.artist, aiSeed = "the artist ${pick.artist}"))) }, filled = false)
+                if (config.playYouTube) {
+                    HudButton("YouTube Music", {
+                        scope.launch {
+                            app.attempt {
+                                val album = pick.album?.let { app.catalog.findAlbum(pick.artist, it) }
+                                if (album != null) nav.go(Screen.YouTubeAlbum(album))
+                                else app.catalog.findArtist(pick.artist)?.let { nav.go(Screen.YouTubeArtist(it)) } ?: app.message("${pick.artist} isn't on YouTube Music")
+                            }
+                        }
+                    }, icon = Icons.Rounded.PlayArrow, filled = false)
+                }
+                if (lidarr != null) {
+                    HudButton("Request", {
+                        scope.launch {
+                            app.attempt {
+                                val (c, k) = app.lidarr.require()
+                                app.message(
+                                    pick.album?.let { app.songRequests.requestAlbum(c, k, it, pick.artist).message }
+                                        ?: if (app.lidarr.requestExactArtist(pick.artist)) "Requested ${pick.artist} in Lidarr" else "Lidarr has ${pick.artist} already, or no exact match",
+                                )
+                            }
+                        }
+                    }, icon = Icons.Rounded.CloudDownload, filled = false)
+                }
+            }
         }
     }
 }
