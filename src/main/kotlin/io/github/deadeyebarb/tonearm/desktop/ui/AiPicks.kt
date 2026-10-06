@@ -131,8 +131,15 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
     var failed by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(asks) {
         try {
-            picks = app.discover(refresh = asks > 0)
             failed = null
+            var next = app.discover(refresh = asks > 0)
+            picks = next
+            // The server makes them in the background: ask again until they're there.
+            while (next?.running == true) {
+                delay(3_000)
+                next = app.discover()
+                picks = next
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -142,16 +149,19 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
     val current = picks
     Column(Modifier.padding(bottom = 16.dp)) {
-        SectionHeader("Discovery picks") { if (current != null) HudButton("Refresh", { asks++ }, filled = false) }
+        SectionHeader("Discovery picks") {
+            if (current != null || failed != null) HudButton(if (failed != null) "Try again" else "Refresh", { asks++ }, filled = false, enabled = current?.running != true)
+        }
         Text(
             when {
-                current == null && failed == null -> "Looking at what you play…"
+                failed == null && (current == null || current.running && current.picks.isEmpty()) -> "Looking at what you play…"
+                current?.running == true -> "Looking for new ones…"
                 current?.picks.isNullOrEmpty() -> "Nothing yet: play and like some music, and artists like it show up here."
                 else -> "Artists you don't have that the ones you play point to, with an album to start with."
             },
             style = MaterialTheme.typography.bodyMedium, color = hud.dim,
         )
-        (failed ?: current?.problem)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
+        (failed ?: current?.problem?.takeUnless { current.running })?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
         current?.picks?.forEach { pick ->
             Row(Modifier.fillMaxWidth().widthIn(max = 900.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Cover(app, pick.coverUrl ?: pick.imageUrl, Modifier.size(56.dp))

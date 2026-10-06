@@ -3,19 +3,6 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 import androidx.compose.foundation.DarkDefaultContextMenuRepresentation
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalContextMenuRepresentation
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
-import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.toComposeImageBitmap
-import io.github.deadeyebarb.tonearm.youtube.YtAlbum
-import io.github.deadeyebarb.tonearm.youtube.YtArtist
-import kotlinx.coroutines.launch
-import org.jetbrains.skia.Image as SkiaImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,12 +24,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Pause
@@ -64,19 +55,26 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,6 +84,10 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
+import io.github.deadeyebarb.tonearm.youtube.YtAlbum
+import io.github.deadeyebarb.tonearm.youtube.YtArtist
+import kotlinx.coroutines.launch
+import org.jetbrains.skia.Image as SkiaImage
 
 /** Where the main area is. */
 sealed interface Screen {
@@ -128,6 +130,15 @@ class Navigator {
     fun go(screen: Screen) = push(screen, section)
 
     fun root(screen: Screen) = push(screen, screen)
+
+    /** Back to [entry] as it was left (its scroll and inputs), as a new step. */
+    fun reopen(entry: Entry) {
+        if (entry.id == this.entry.id) return
+        while (history.lastIndex > position) history.removeAt(history.lastIndex)
+        history += entry
+        if (history.size > MAX) history.removeAt(0)
+        position = history.lastIndex
+    }
 
     private fun push(screen: Screen, section: Screen) {
         if (screen == current) return
@@ -174,6 +185,8 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
     val states = rememberSaveableStateHolder()
     var queueOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { app.messages.collect { snackbar.showSnackbar(it) } }
+    // What's started here remembers where, for the player bar to go back to.
+    LaunchedEffect(nav) { app.player.origin = { nav.entry } }
     val playerError = app.player.state.collectAsState().value.error
     LaunchedEffect(playerError) {
         if (playerError != null) {
@@ -213,7 +226,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
                             }
                         }
                     }
-                    PlayerBar(app, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen)
+                    PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen)
                 }
                 if (queueOpen) QueuePanel(app) { queueOpen = false }
             }
@@ -295,8 +308,9 @@ private fun Rail(app: DesktopApp, nav: Navigator) {
 }
 
 @Composable
-private fun PlayerBar(app: DesktopApp, onQueue: () -> Unit, queueOpen: Boolean) {
+private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean) {
     val hud = Hud.colors
+    val ui = LocalUi.current
     val state by app.player.state.collectAsState()
     val song = state.current
     Row(
@@ -305,14 +319,26 @@ private fun PlayerBar(app: DesktopApp, onQueue: () -> Unit, queueOpen: Boolean) 
     ) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (song != null) {
-                SongCover(app, song, Modifier.size(64.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.small))
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f, fill = false)) {
-                    Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(qualityLine(song, state), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1)
-                    outputLine(state)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1) }
-                    rememberFetchState(app, song)?.let { Text(it.label().uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent, maxLines = 1) }
+                // The song opens where it was started from, the artist their page; right-click for the song's menu.
+                val openFrom = { app.openPlayedFrom(nav, state.from, song) }
+                val link = Modifier.pointerHoverIcon(PointerIcon.Hand)
+                Box(Modifier.weight(1f, fill = false)) {
+                    MenuArea({ songMenu(app, nav, ui, song) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SongCover(app, song, link.size(64.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.small).clickable(onClick = openFrom))
+                            Spacer(Modifier.width(14.dp))
+                            Column {
+                                Text(song.title, link.clickable(onClick = openFrom), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    song.artist.orEmpty(), song.artist?.let { artist -> link.clickable { app.openArtist(nav, artist, song.artistId.takeIf { song.source == ConnectSong.SERVER }) } } ?: Modifier,
+                                    style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(qualityLine(song, state), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1)
+                                outputLine(state)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1) }
+                                rememberFetchState(app, song)?.let { Text(it.label().uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent, maxLines = 1) }
+                            }
+                        }
+                    }
                 }
                 Spacer(Modifier.width(4.dp))
                 LikeButton(app, song)

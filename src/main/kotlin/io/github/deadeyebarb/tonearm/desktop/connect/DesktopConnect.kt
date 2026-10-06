@@ -135,7 +135,7 @@ class DesktopConnect(
             ConnectCommand.SEEK -> command.positionMs?.let(player::seek)
             ConnectCommand.VOLUME -> command.volume?.let(player::setVolume)
             ConnectCommand.JUMP -> command.index?.let { player.jump(it + windowFrom) }
-            ConnectCommand.LOAD -> command.queue?.let { player.play(it, command.index ?: 0, command.positionMs ?: 0, command.shuffle ?: false) }
+            ConnectCommand.LOAD -> command.queue?.let { player.play(it, command.index ?: 0, command.positionMs ?: 0, command.shuffle ?: false, from = null) }
             ConnectCommand.SHUFFLE -> command.shuffle?.let(player::setShuffle)
             ConnectCommand.REPEAT -> command.repeat?.let(player::setRepeat)
             ConnectCommand.STOP -> player.stop()

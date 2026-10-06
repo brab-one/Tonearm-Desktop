@@ -34,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
-import io.github.deadeyebarb.tonearm.integrations.Names
 import kotlinx.coroutines.launch
 
 /**
@@ -143,7 +142,7 @@ fun MoreLikeScreen(app: DesktopApp, nav: Navigator, like: MoreLikeSeed) {
 @Composable
 private fun SimilarCard(app: DesktopApp, nav: Navigator, artist: SimilarArtist) {
     val scope = rememberCoroutineScope()
-    fun open() = scope.launch { app.attempt { openArtist(app, nav, artist) } }
+    fun open() = app.openArtist(nav, artist.artist)
     MenuArea({
         buildList {
             add(MenuEntry("Open") { open() })
@@ -163,15 +162,4 @@ private fun SimilarCard(app: DesktopApp, nav: Navigator, artist: SimilarArtist) 
     }) {
         CardItem(app, artist.imageUrl, artist.artist, if (artist.inLibrary) "In your library" else "Not in your library", { open() }, round = true)
     }
-}
-
-/** An artist by name: their page in the library when it has them, else on YouTube Music. */
-private suspend fun openArtist(app: DesktopApp, nav: Navigator, artist: SimilarArtist) {
-    if (artist.inLibrary) {
-        val hit = app.api.search(artist.artist, artistCount = 10, albumCount = 0, songCount = 0).artist
-            .firstOrNull { Names.normalize(it.name) == Names.normalize(artist.artist) }
-        if (hit != null) return nav.go(Screen.Artist(hit.id))
-    }
-    val found = app.catalog.findArtist(artist.artist) ?: return app.message("${artist.artist} isn't on YouTube Music")
-    nav.go(Screen.YouTubeArtist(found))
 }

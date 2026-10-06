@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
 import kotlinx.coroutines.launch
 
@@ -179,6 +180,38 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
         ConnectSong.LOCAL -> song.albumId?.let { add(MenuEntry("Go to album") { nav.go(Screen.LocalAlbum(it)) }) }
     }
     addAll(extra)
+}
+
+/** An artist's page in the app: by [id] in the library, else by name there, else on YouTube Music. */
+fun DesktopApp.openArtist(nav: Navigator, name: String, id: String? = null) {
+    if (id != null) return nav.go(Screen.Artist(id))
+    scope.launch {
+        attempt {
+            val key = Names.normalize(name)
+            val own = api.search(name, artistCount = 10, albumCount = 0, songCount = 0).artist.firstOrNull { Names.normalize(it.name) == key }
+            if (own != null) return@attempt nav.go(Screen.Artist(own.id))
+            val found = catalog.findArtist(name) ?: return@attempt message("$name isn't in your library or on YouTube Music")
+            nav.go(Screen.YouTubeArtist(found))
+        }
+    }
+}
+
+/** Where the playing [song] was started from ([PlayerState.from]); its album when that's unknown (started on another device). */
+fun DesktopApp.openPlayedFrom(nav: Navigator, from: Any?, song: ConnectSong) {
+    when (from) {
+        is Navigator.Entry -> nav.reopen(from)
+        is Screen -> nav.go(from)
+        else -> when (song.source) {
+            ConnectSong.SERVER -> song.albumId?.let { nav.go(Screen.Album(it)) }
+            ConnectSong.LOCAL -> song.albumId?.let { nav.go(Screen.LocalAlbum(it)) }
+            else -> scope.launch {
+                attempt {
+                    val album = song.album?.let { catalog.findAlbum(song.artist.orEmpty(), it) } ?: return@attempt message("Couldn't find “${song.title}”'s album")
+                    nav.go(Screen.YouTubeAlbum(album))
+                }
+            }
+        }
+    }
 }
 
 /** Opens an artist's YouTube Music page by name. */

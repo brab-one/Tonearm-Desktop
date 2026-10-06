@@ -130,7 +130,7 @@ private fun AlbumCard(app: DesktopApp, nav: Navigator, album: Album) {
 
 private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album): List<MenuEntry> = buildList {
     fun songs(block: suspend (List<ConnectSong>) -> Unit) = app.scope.launch { app.attempt { block(app.api.album(album.id).song.map { it.toConnectSong() }) } }
-    add(MenuEntry("Play") { songs { app.player.play(it) } })
+    add(MenuEntry("Play") { songs { app.player.play(it, from = Screen.Album(album.id)) } })
     add(MenuEntry("Play next") { songs { app.player.playNext(it) } })
     add(MenuEntry("Add to queue") { songs { app.player.enqueue(it) } })
     add(MenuEntry("Add to playlist…") { songs { ui.addToPlaylist = it } })

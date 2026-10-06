@@ -39,6 +39,8 @@ data class PlayerState(
     val outRate: Int? = null,
     val outFormat: String? = null,
     val error: String? = null,
+    /** Where the queue was started from (the UI's place to go back to), null when another device started it. */
+    val from: Any? = null,
 ) {
     val current: ConnectSong? get() = queue.getOrNull(index)
 }
@@ -111,12 +113,15 @@ class DesktopPlayer(
         }.getOrDefault(emptyList())
     }
 
+    /** Where the UI is, for [PlayerState.from] when a queue starts. */
+    var origin: () -> Any? = { null }
+
     // --- Commands (any thread) -----------------------------------------------------------------
 
-    fun play(queue: List<ConnectSong>, index: Int = 0, positionMs: Long = 0, shuffle: Boolean = false) = post {
+    fun play(queue: List<ConnectSong>, index: Int = 0, positionMs: Long = 0, shuffle: Boolean = false, from: Any? = origin()) = post {
         if (queue.isEmpty()) return@post
         val start = index.coerceIn(queue.indices)
-        _state.update { it.copy(queue = queue, index = start, shuffle = shuffle, error = null) }
+        _state.update { it.copy(queue = queue, index = start, shuffle = shuffle, error = null, from = from) }
         order = playOrder(queue.size, start, shuffle)
         loadCurrent(positionMs)
     }
