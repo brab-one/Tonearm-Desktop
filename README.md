@@ -35,6 +35,7 @@ submodule).
   and a 10-band equalizer with presets and automatic headroom
 - **When the queue ends**: stop, similar music (library first, then YouTube Music's radio), or another playlist
 - Back/forward like a browser: the mouse's side buttons, Alt+← / Alt+→ or the arrows at the top
+- Mouse-friendly rows: arrows at the edges of every horizontal row, a scrollbar under it, click-and-drag, Shift + wheel
 - Playback through **libmpv**: bit-perfect FLAC up to 32-bit/384 kHz, gapless, ReplayGain, Opus/AAC.
   The queue lives in Tonearm (shuffle, repeat, play next, remove), mpv only holds the current and next
   song so it can prefetch the transition
