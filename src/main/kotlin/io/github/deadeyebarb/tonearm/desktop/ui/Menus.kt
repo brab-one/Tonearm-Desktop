@@ -108,17 +108,16 @@ fun DesktopApp.like(song: ConnectSong, like: Boolean) {
     scope.launch { attempt { likes.set(song, like) } }
 }
 
-/** Asks Brainarr (through Lidarr) for a few albums like the selection, and has Lidarr get them. */
-fun DesktopApp.moreLikeThis(label: String, seeds: List<String>, genres: List<String> = emptyList()) {
-    if (lidarr.current.value?.takeUnless { it.limited } == null) return message("Brainarr needs Lidarr: connect it in Settings (or, through the Tonearm server, be one of its admins)")
-    message("Asking Brainarr for more like $label… this can take a minute")
+/** Whether "more like this" can be asked: the Tonearm server has an AI for picks. */
+val DesktopApp.canAskMoreLike: Boolean get() = tonearmServer.server.value?.recommendations == true
+
+/** Asks the Tonearm server's AI for albums like [seed] ("the album “Dummy” by Portishead"); they show up as the AI picks. */
+fun DesktopApp.moreLikeThis(seed: String) {
+    if (!canAskMoreLike) return message("More like this needs the Tonearm server with Ollama")
     scope.launch {
         attempt {
-            val result = lidarr.moreLikeThis(label, seeds, genres)
-            message(
-                if (result.added.isEmpty()) "Brainarr found nothing new like $label" + (result.message?.let { " ($it)" } ?: "")
-                else "Requested like $label: " + result.added.joinToString(),
-            )
+            aiPicks(refresh = true, seed = seed)
+            message("Asking for albums like $seed; they'll be under AI picks in a few minutes")
         }
     }
 }
@@ -141,10 +140,8 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
             }
         })
     }
-    if (app.lidarr.current.value?.limited == false) {
-        add(MenuEntry("More like this (Brainarr)") {
-            app.moreLikeThis("“${song.title}”", listOfNotNull(song.artist?.let { "“${song.title}” by $it" }, song.artist))
-        })
+    if (app.canAskMoreLike) {
+        add(MenuEntry("More like this") { app.moreLikeThis("the song “${song.title}”" + (song.artist?.let { " by $it" } ?: "")) })
     }
     when (song.source) {
         ConnectSong.SERVER -> {

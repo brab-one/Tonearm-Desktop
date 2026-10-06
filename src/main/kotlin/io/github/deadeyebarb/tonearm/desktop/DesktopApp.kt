@@ -81,7 +81,7 @@ class DesktopApp {
     private val connectClient = ConnectClient(integrationHttp, json)
     /** The Tonearm server at the music server's address: Connect, and Lidarr with its key. */
     val tonearmServer = ConnectRouter(connectClient)
-    val lidarr = DesktopLidarr(LidarrClient(integrationHttp, json), api, config, tonearmServer, scope)
+    val lidarr = DesktopLidarr(LidarrClient(integrationHttp, json), config, tonearmServer, scope)
     val youtube = YouTubeMusic(youtubeClient)
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -100,15 +100,15 @@ class DesktopApp {
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, lidarr, player, scope).also { it.start() }
 
-    /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones. */
-    suspend fun aiPicks(refresh: Boolean = false): AiPicks =
-        connectClient.aiPicks(sessions.current() ?: throw NoServerException(), refresh)
+    /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones, a [seed] for ones like that. */
+    suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks =
+        connectClient.aiPicks(sessions.current() ?: throw NoServerException(), refresh, seed)
     val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(connectClient, json), connect::route, json, AppDirs.config, ::message)
         .also { it.start() }
     val playlists = DesktopPlaylists(scope, api, sessions, youtube, lidarr, songRequests, json, File(AppDirs.config, "playlist-placeholders.json"), ::message)
         .also { it.start() }
     val local = LocalLibrary(json, config, AppDirs.cache).also { it.start(scope) }
-    val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, config.state.value.deviceId, File(AppDirs.config, "weekly-run.json"))
+    val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, config.state.value.deviceId, File(AppDirs.config, "weekly-run.json"))
 
     init {
         // Notice when the Tonearm server appears, goes, or the music server changes.
@@ -127,16 +127,22 @@ class DesktopApp {
                 delay(60_000L)
             }
         }
-        // Brainarr's weekly picks: check now and then, more often while a run is under way.
+        // Weekly picks: check every half hour, and every two minutes while a run (started here or from the AI picks screen) is under way.
         scope.launch {
+            var checked = 0L
             while (true) {
-                val session = sessions.current()
-                val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited }
-                if (session != null && lidarrSetup != null) {
-                    runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }.getOrNull()?.let(::message)
-                    runCatching { lidarr.tidyLists() }
+                val running = File(AppDirs.config, "weekly-run.json").exists()
+                if (running || System.currentTimeMillis() - checked >= 30 * 60_000L) {
+                    val session = sessions.current()
+                    // Lidarr may come from the Tonearm server, which has to be looked up first after a start.
+                    runCatching { tonearmServer.refresh(session) }
+                    val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited }
+                    if (session != null && lidarrSetup != null) {
+                        checked = System.currentTimeMillis()
+                        runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }.getOrNull()?.let(::message)
+                    }
                 }
-                delay(if (File(AppDirs.config, "weekly-run.json").exists()) 2 * 60_000L else 30 * 60_000L)
+                delay(2 * 60_000L)
             }
         }
     }

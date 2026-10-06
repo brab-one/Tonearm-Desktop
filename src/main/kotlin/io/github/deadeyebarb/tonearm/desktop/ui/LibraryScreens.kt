@@ -103,6 +103,10 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
     }
 }
 
+/** How "more like this" describes an album to the AI. */
+private fun albumSeed(album: Album) =
+    "the album “${album.name}”" + album.artistLabel.takeIf { it.isNotEmpty() }?.let { " by $it" }.orEmpty() + album.genre?.let { " ($it)" }.orEmpty()
+
 @Composable
 private fun AlbumCard(app: DesktopApp, nav: Navigator, album: Album) {
     val ui = LocalUi.current
@@ -117,11 +121,7 @@ private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album
     add(MenuEntry("Play next") { songs { app.player.playNext(it) } })
     add(MenuEntry("Add to queue") { songs { app.player.enqueue(it) } })
     add(MenuEntry("Add to playlist…") { songs { ui.addToPlaylist = it } })
-    if (app.lidarr.current.value != null) {
-        add(MenuEntry("More like this (Brainarr)") {
-            app.moreLikeThis("“${album.name}”", listOfNotNull(album.artistLabel.takeIf { it.isNotEmpty() }?.let { "the album “${album.name}” by $it" }, album.artistLabel), listOfNotNull(album.genre))
-        })
-    }
+    if (app.canAskMoreLike) add(MenuEntry("More like this") { app.moreLikeThis(albumSeed(album)) })
     album.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
 }
 
@@ -163,9 +163,10 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             HudButton("Play", { scope.launch { app.attempt { app.player.play(songsOf(app, albums)) } } }, icon = Icons.Rounded.PlayArrow)
                             HudButton("Shuffle", { scope.launch { app.attempt { app.player.play(songsOf(app, albums).shuffled()) } } }, icon = Icons.Rounded.Shuffle, filled = false)
-                            if (lidarrConfig != null) {
+                            if (app.canAskMoreLike) {
                                 HudButton("More like this", {
-                                    app.moreLikeThis(artist.name, listOf(artist.name), albums.mapNotNull { it.genre }.distinct())
+                                    val genres = albums.mapNotNull { it.genre }.distinct().take(3)
+                                    app.moreLikeThis("the artist ${artist.name}" + if (genres.isEmpty()) "" else " (${genres.joinToString()})")
                                 }, icon = Icons.Rounded.AutoAwesome, filled = false)
                             }
                         }
@@ -234,10 +235,8 @@ fun AlbumScreen(app: DesktopApp, nav: Navigator, id: String) {
             onSubtitle = album.artistId?.let { artistId -> { nav.go(Screen.Artist(artistId)) } },
             numberOf = { song, _ -> song.track },
             extraButtons = {
-                if (app.lidarr.current.value != null) {
-                    HudButton("More like this", {
-                        app.moreLikeThis("“${album.name}”", listOf("the album “${album.name}” by ${album.artistLabel}", album.artistLabel), listOfNotNull(album.genre))
-                    }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                if (app.canAskMoreLike) {
+                    HudButton("More like this", { app.moreLikeThis(albumSeed(album)) }, icon = Icons.Rounded.AutoAwesome, filled = false)
                 }
             },
         )

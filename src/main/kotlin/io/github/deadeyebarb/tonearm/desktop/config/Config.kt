@@ -32,8 +32,6 @@ data class DesktopConfig(
     /** Folders on this computer whose music shows up under "This computer". */
     val localFolders: List<String> = emptyList(),
     val audio: AudioSettings = AudioSettings(),
-    /** MusicBrainz ids of artists Brainarr runs started from here added. */
-    val brainarrRecorded: List<String> = emptyList(),
 ) {
     companion object {
         fun defaultDeviceName(): String {

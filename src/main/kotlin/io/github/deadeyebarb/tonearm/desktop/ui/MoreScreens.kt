@@ -210,8 +210,8 @@ fun LocalAlbumScreen(app: DesktopApp, nav: Navigator, key: String) {
         subtitle = listOfNotNull(album.artist, album.year?.toString(), album.tracks.firstNotNullOfOrNull { it.genre }).joinToString(" · "),
         songs = songs,
         buttons = {
-            if (app.lidarr.current.value != null) {
-                HudButton("More like this", { app.moreLikeThis("“${album.title}”", listOf("the album “${album.title}” by ${album.artist}", album.artist)) }, icon = Icons.Rounded.AutoAwesome, filled = false)
+            if (app.canAskMoreLike) {
+                HudButton("More like this", { app.moreLikeThis("the album “${album.title}” by ${album.artist}") }, icon = Icons.Rounded.AutoAwesome, filled = false)
             }
         },
     )
@@ -244,8 +244,8 @@ fun YouTubeArtistScreen(app: DesktopApp, nav: Navigator, artist: YtArtist) {
                 } else if (app.lidarr.current.value != null) {
                     HudButton("Request", { scope.launch { app.attempt { app.message(if (app.lidarr.requestExactArtist(page.artist.name)) "Requested ${page.artist.name} in Lidarr" else "Lidarr has ${page.artist.name} already, or no exact match") } } }, icon = Icons.Rounded.CloudDownload, filled = false)
                 }
-                if (app.lidarr.current.value != null) {
-                    HudButton("More like this", { app.moreLikeThis(page.artist.name, listOf(page.artist.name)) }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                if (app.canAskMoreLike) {
+                    HudButton("More like this", { app.moreLikeThis("the artist ${page.artist.name}") }, icon = Icons.Rounded.AutoAwesome, filled = false)
                 }
                 if ((page.description?.length ?: 0) >= 400) HudButton(if (expanded) "Less" else "More about them", { expanded = !expanded }, filled = false)
             },

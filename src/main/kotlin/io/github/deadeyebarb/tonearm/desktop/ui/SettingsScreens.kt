@@ -239,14 +239,14 @@ private fun LidarrForm(app: DesktopApp, existing: LidarrConfig?) {
     var useServerTls by remember(existing) { mutableStateOf(existing?.useServerTls ?: true) }
     var test by remember { mutableStateOf<TestState>(TestState.Idle) }
     Text(
-        "Requests, downloads and Brainarr's picks; also Tonearm Connect's relay when there's no Tonearm server.",
+        "Requests, downloads and weekly picks; also Tonearm Connect's relay when there's no Tonearm server.",
         style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
     )
     val current by app.lidarr.current.collectAsState()
     if (current?.viaServer == true) {
         Text(
             "✓ Lidarr comes through the Tonearm server on your music server, which holds its key: nothing to set up here. " +
-                "What you enter below is only used without it." + if (current?.limited == true) " You can request music and see downloads; Brainarr is for its admins." else "",
+                "What you enter below is only used without it." + if (current?.limited == true) " You can request music and see downloads; weekly picks are for its admins." else "",
             style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent, modifier = Modifier.padding(top = 6.dp),
         )
     }
@@ -263,13 +263,8 @@ private fun LidarrForm(app: DesktopApp, existing: LidarrConfig?) {
                 val previous = app.config.state.value.lidarr
                 test = try {
                     app.config.update { it.copy(lidarr = candidate) }
-                    val brainarr = runCatching { app.lidarr.brainarrLists() }.getOrNull()
                     app.lidarr.queue()
-                    TestState.Passed("Connected" + when {
-                        brainarr == null -> ""
-                        brainarr.isEmpty() -> " · no Brainarr list"
-                        else -> " · Brainarr: " + brainarr.joinToString { it.name }
-                    })
+                    TestState.Passed("Connected")
                 } catch (e: Exception) {
                     app.config.update { it.copy(lidarr = previous) }
                     TestState.Failed(e.userMessage())

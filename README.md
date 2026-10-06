@@ -2,12 +2,12 @@
 
 The desktop version of [Tonearm](https://github.com/brab-one/Tonearm-PhoneApp) for Linux and Windows: a lossless
 player for **Subsonic / OpenSubsonic** servers (Navidrome and others) with **mutual TLS**, a
-**Lidarr / Brainarr** dashboard, and **Tonearm Connect** so the phone can control it.
+**Lidarr** dashboard, **AI picks**, and **Tonearm Connect** so the phone can control it.
 
 The short install and setup guide for all parts is in [Tonearm](https://github.com/brab-one/Tonearm).
 
 It's written in Kotlin with Compose for Desktop: a native UI drawn with Skia, no browser engine, in the
-same neon HUD style as the phone. The Subsonic client, TLS, Lidarr/Brainarr, Connect and YouTube Music
+same neon HUD style as the phone. The Subsonic client, TLS, Lidarr, Connect, weekly picks and YouTube Music
 code is the phone app's own (`shared/` in the [Tonearm-PhoneApp](https://github.com/brab-one/Tonearm-PhoneApp) repository, included here as the `tonearm`
 submodule).
 
@@ -23,10 +23,11 @@ submodule).
   Lidarr has them ("Request missing" asks for their albums)
 - **Import** playlists from YouTube Music / YouTube and Spotify links (Spotify: the first 100 songs), CSV
   exports (Exportify, TuneMyMusic, Soundiiz…) and Spotify's own data export (Playlist1.json)
-- **More like this**: right-click a song, album, artist, playlist or Brainarr pick (or use the button on its
-  page) and Brainarr picks a few albums like it, which Lidarr gets
-- **Weekly picks**: a new Brainarr selection every week, downloaded into a playlist that's deleted a week
-  later (music included) unless you like it and give it a name; albums with liked songs stay either way
+- **More like this**: right-click a song, album, artist or playlist (or use the button on its page) and the
+  Tonearm server's AI suggests albums like it, shown under AI picks
+- **Weekly picks** (AI picks screen): the first few AI picks downloaded every week into a playlist that's
+  deleted a week later (music included) unless you like it and give it a name; albums with liked songs stay
+  either way
 - **YouTube Music artists and albums**: bios, popular songs, radio and the albums you don't have, playable
   and requestable
 - **This computer**: music folders on the PC (FLAC, MP3, AAC, Opus, WAV…), played straight from disk
@@ -43,8 +44,7 @@ submodule).
   random path token feeds mpv, so mpv never sees credentials or the certificate
 - **Lidarr**: request artists and albums, follow the downloads
 - **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
-  and like, at the bottom of Home; open one on YouTube Music or request it
-- **Brainarr**: its picks with library/download status, Ask Brainarr, Get, labelling its picks, Play picks
+  and like, on their own screen and at the bottom of Home; open one on YouTube Music or request it
 - **YouTube Music** for what you don't have (in search), with the artist requested in Lidarr when it plays
 - **Tonearm Connect**: with the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your
   Navidrome (or the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr), the phone's

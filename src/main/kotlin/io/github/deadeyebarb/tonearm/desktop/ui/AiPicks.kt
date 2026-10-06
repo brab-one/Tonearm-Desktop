@@ -3,6 +3,11 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -10,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +35,9 @@ import io.github.deadeyebarb.tonearm.connect.AiPick
 import io.github.deadeyebarb.tonearm.connect.AiPicks
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
+import io.github.deadeyebarb.tonearm.weekly.WeeklySettings
+import io.github.deadeyebarb.tonearm.weekly.WeeklyState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -39,7 +49,7 @@ import java.util.Date
  * open one on YouTube Music, or request it in Lidarr. Only there when the server has Ollama.
  */
 @Composable
-fun AiPicksSection(app: DesktopApp, nav: Navigator) {
+fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
     val server by app.tonearmServer.server.collectAsState()
     if (server?.recommendations != true) return
     val lidarr by app.lidarr.current.collectAsState()
@@ -67,7 +77,8 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
     val current = picks
     Column(Modifier.padding(bottom = 16.dp)) {
-        SectionHeader("AI picks for you") {
+        if (full && lidarr?.limited == false) WeeklyCard(app, nav)
+        SectionHeader(if (full) "Albums for you" else "AI picks for you") {
             if (current != null && !current.running) HudButton("Ask again", { asks++ }, filled = false)
         }
         Text(
@@ -80,8 +91,82 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator) {
             },
             style = MaterialTheme.typography.bodyMedium, color = hud.dim,
         )
+        current?.seed?.let { Text("More like $it", style = MaterialTheme.typography.bodyMedium, color = hud.accent2, modifier = Modifier.padding(top = 4.dp)) }
         (failed ?: current?.problem)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
         current?.picks?.forEach { pick -> AiPickRow(app, nav, pick, canRequest = lidarr != null, youtube = config.playYouTube) }
+    }
+}
+
+/** The "AI picks" screen: the picks, and weekly picks for Navidrome admins with Lidarr. */
+@Composable
+fun AiPicksScreen(app: DesktopApp, nav: Navigator) {
+    val server by app.tonearmServer.server.collectAsState()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp)) {
+        ScreenTitle("AI picks", "ALBUMS BY ARTISTS YOU DON'T HAVE, FROM WHAT YOU PLAY")
+        if (server?.recommendations == true) {
+            AiPicksSection(app, nav, full = true)
+        } else {
+            Text(
+                "AI picks come from the Tonearm server on your music server, once it has Ollama (OLLAMA_URL). " +
+                    "Its README has the setup.",
+                style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim, modifier = Modifier.padding(top = 12.dp),
+            )
+        }
+    }
+}
+
+/** Weekly picks: the first few AI picks downloaded every week into a playlist that's deleted a week later unless liked. */
+@Composable
+private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
+    val hud = Hud.colors
+    val scope = rememberCoroutineScope()
+    var settings by remember { mutableStateOf<WeeklySettings?>(null) }
+    var current by remember { mutableStateOf<WeeklyBatch?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var changed by remember { mutableIntStateOf(0) }
+    LaunchedEffect(changed) {
+        val session = app.sessions.current() ?: return@LaunchedEffect
+        settings = runCatching { app.weekly.settings(session) }.getOrNull()
+        current = runCatching { app.weekly.batches(session) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
+    }
+    fun set(next: WeeklySettings) {
+        val session = app.sessions.current() ?: return
+        busy = true
+        scope.launch {
+            app.attempt {
+                app.weekly.saveSettings(session, next)
+                settings = next
+                if (next.on) app.lidarr.requireOrNull()?.let { (c, k) -> app.weekly.tick(c, k, session)?.let(app::message) }
+                changed++
+            }
+            busy = false
+        }
+    }
+    Panel(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), glow = settings?.on == true) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("WEEKLY PICKS", style = MaterialTheme.typography.labelMedium, color = hud.accent)
+                    Text(
+                        "Every week the first few AI picks are downloaded and arrive as a playlist. A week later it's deleted, music " +
+                            "included, unless you like the playlist (and give it a name). Albums with a song you liked stay either way.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(settings?.on == true, { set((settings ?: WeeklySettings()).copy(on = it)) }, enabled = !busy && settings != null,
+                    colors = SwitchDefaults.colors(checkedTrackColor = hud.accent))
+            }
+            settings?.takeIf { it.on }?.let { on ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
+                    for (n in listOf(3, 5, 10)) HudButton("$n albums a week", { if (on.albums != n) set(on.copy(albums = n)) }, filled = on.albums == n, enabled = !busy)
+                }
+            }
+            current?.let { batch ->
+                val status = if (batch.state.status == WeeklyState.RUNNING) "picking…" else "${batch.state.albums.size} albums · ${batch.playlist.songCount} songs here so far"
+                HudButton("${batch.playlist.name}: $status", { nav.go(Screen.Playlist(batch.playlist.id)) }, filled = false, modifier = Modifier.padding(top = 10.dp))
+            }
+        }
     }
 }
 

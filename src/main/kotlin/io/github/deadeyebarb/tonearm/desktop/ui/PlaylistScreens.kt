@@ -121,7 +121,7 @@ private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: Strin
             app.scope.launch { app.attempt { app.playlists.rename(id, new); changed() } }
         }
     },
-    MenuEntry("More like this (Brainarr)") { app.scope.launch { app.attempt { moreLikePlaylist(app, id, name) } } },
+    MenuEntry("More like this") { app.scope.launch { app.attempt { moreLikePlaylist(app, id, name) } } },
     MenuEntry("Delete") {
         ui.prompt = Prompt("Delete “$name”?", "Type the name to confirm", "", "Delete") { typed ->
             if (typed == name) app.scope.launch { app.attempt { app.playlists.delete(id); changed(); if (nav.current == Screen.Playlist(id)) nav.back() } }
@@ -134,7 +134,7 @@ private suspend fun moreLikePlaylist(app: DesktopApp, id: String, name: String) 
     val playlist = app.api.playlist(id)
     val artists = playlist.entry.mapNotNull { it.artist }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(6)
     val genres = playlist.entry.mapNotNull { it.genre }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(3)
-    app.moreLikeThis("the playlist “$name”", artists, genres)
+    app.moreLikeThis("the playlist “$name” (${(artists + genres).joinToString()})")
 }
 
 @Composable
@@ -220,9 +220,9 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                 }
                 when {
                     weekly != null -> Text(
-                        "Brainarr's picks for the week. When next week's arrive, this playlist and its music are deleted, except albums with a song you " +
+                        "This week's AI picks. When next week's arrive, this playlist and its music are deleted, except albums with a song you " +
                             "liked or put in another playlist. “Like & keep” keeps all of it under a name of your own." +
-                            if (weekly.status == WeeklyState.RUNNING) " Brainarr is still picking." else " Coming: " + weekly.albums.joinToString { "${it.title} (${it.artist})" },
+                            if (weekly.status == WeeklyState.RUNNING) " Still picking." else " Coming: " + weekly.albums.joinToString { "${it.title} (${it.artist})" },
                         style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(bottom = 8.dp),
                     )
                     waiting > 0 -> Text(
