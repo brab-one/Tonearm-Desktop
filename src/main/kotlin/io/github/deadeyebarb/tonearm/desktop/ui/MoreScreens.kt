@@ -210,7 +210,7 @@ fun LocalAlbumScreen(app: DesktopApp, nav: Navigator, key: String) {
         subtitle = listOfNotNull(album.artist, album.year?.toString(), album.tracks.firstNotNullOfOrNull { it.genre }).joinToString(" · "),
         songs = songs,
         buttons = {
-            if (app.config.state.value.lidarr != null) {
+            if (app.lidarr.current.value != null) {
                 HudButton("More like this", { app.moreLikeThis("“${album.title}”", listOf("the album “${album.title}” by ${album.artist}", album.artist)) }, icon = Icons.Rounded.AutoAwesome, filled = false)
             }
         },
@@ -241,10 +241,10 @@ fun YouTubeArtistScreen(app: DesktopApp, nav: Navigator, artist: YtArtist) {
                 if (top.isNotEmpty()) HudButton("Radio", { scope.launch { app.attempt { playRadio(app, top.first()) } } }, icon = Icons.Rounded.Radio, filled = false)
                 if (inLibrary != null) {
                     HudButton("In your library", { nav.go(Screen.Artist(inLibrary.id)) }, icon = Icons.Rounded.LibraryMusic, filled = false)
-                } else if (app.config.state.value.lidarr != null) {
+                } else if (app.lidarr.current.value != null) {
                     HudButton("Request", { scope.launch { app.attempt { app.message(if (app.lidarr.requestExactArtist(page.artist.name)) "Requested ${page.artist.name} in Lidarr" else "Lidarr has ${page.artist.name} already, or no exact match") } } }, icon = Icons.Rounded.CloudDownload, filled = false)
                 }
-                if (app.config.state.value.lidarr != null) {
+                if (app.lidarr.current.value != null) {
                     HudButton("More like this", { app.moreLikeThis(page.artist.name, listOf(page.artist.name)) }, icon = Icons.Rounded.AutoAwesome, filled = false)
                 }
                 if ((page.description?.length ?: 0) >= 400) HudButton(if (expanded) "Less" else "More about them", { expanded = !expanded }, filled = false)
@@ -287,7 +287,7 @@ fun YouTubeAlbumScreen(app: DesktopApp, nav: Navigator, album: YtAlbum) {
             buttons = {
                 when {
                     inLibrary != null -> HudButton("In your library", { nav.go(Screen.Album(inLibrary.id)) }, icon = Icons.Rounded.LibraryMusic, filled = false)
-                    app.config.state.value.lidarr != null -> HudButton("Request album", {
+                    app.lidarr.current.value != null -> HudButton("Request album", {
                         scope.launch {
                             app.attempt {
                                 val (c, k) = app.lidarr.require()

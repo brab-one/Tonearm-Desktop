@@ -98,6 +98,7 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
                     }
                 }
             }
+            item(key = "ai-picks") { AiPicksSection(app, nav) }
         }
     }
 }
@@ -116,7 +117,7 @@ private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album
     add(MenuEntry("Play next") { songs { app.player.playNext(it) } })
     add(MenuEntry("Add to queue") { songs { app.player.enqueue(it) } })
     add(MenuEntry("Add to playlist…") { songs { ui.addToPlaylist = it } })
-    if (app.config.state.value.lidarr != null) {
+    if (app.lidarr.current.value != null) {
         add(MenuEntry("More like this (Brainarr)") {
             app.moreLikeThis("“${album.name}”", listOfNotNull(album.artistLabel.takeIf { it.isNotEmpty() }?.let { "the album “${album.name}” by $it" }, album.artistLabel), listOfNotNull(album.genre))
         })
@@ -145,6 +146,7 @@ fun ArtistsScreen(app: DesktopApp, nav: Navigator) {
 fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
     val scope = rememberCoroutineScope()
     val config by app.config.state.collectAsState()
+    val lidarrConfig by app.lidarr.current.collectAsState()
     val loader = rememberLoad(id) { app.api.artist(id) }
     LoadContent(loader) { artist ->
         val albums = artist.album.sortedByDescending { it.year ?: 0 }
@@ -161,7 +163,7 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             HudButton("Play", { scope.launch { app.attempt { app.player.play(songsOf(app, albums)) } } }, icon = Icons.Rounded.PlayArrow)
                             HudButton("Shuffle", { scope.launch { app.attempt { app.player.play(songsOf(app, albums).shuffled()) } } }, icon = Icons.Rounded.Shuffle, filled = false)
-                            if (config.lidarr != null) {
+                            if (lidarrConfig != null) {
                                 HudButton("More like this", {
                                     app.moreLikeThis(artist.name, listOf(artist.name), albums.mapNotNull { it.genre }.distinct())
                                 }, icon = Icons.Rounded.AutoAwesome, filled = false)
@@ -232,7 +234,7 @@ fun AlbumScreen(app: DesktopApp, nav: Navigator, id: String) {
             onSubtitle = album.artistId?.let { artistId -> { nav.go(Screen.Artist(artistId)) } },
             numberOf = { song, _ -> song.track },
             extraButtons = {
-                if (app.config.state.value.lidarr != null) {
+                if (app.lidarr.current.value != null) {
                     HudButton("More like this", {
                         app.moreLikeThis("“${album.name}”", listOf("the album “${album.name}” by ${album.artistLabel}", album.artistLabel), listOfNotNull(album.genre))
                     }, icon = Icons.Rounded.AutoAwesome, filled = false)
@@ -297,6 +299,7 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     val config by app.config.state.collectAsState()
+    val lidarrConfig by app.lidarr.current.collectAsState()
     val state by app.player.state.collectAsState()
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Search", null)
@@ -385,7 +388,7 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                             item {
                                 SectionHeader("On YouTube Music")
                                 Text(
-                                    "Not on your server. These play from YouTube Music" + if (config.lidarr != null) "; like one (or right-click → Request) to get it in Lidarr." else ".",
+                                    "Not on your server. These play from YouTube Music" + if (lidarrConfig != null) "; like one (or right-click → Request) to get it in Lidarr." else ".",
                                     style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim,
                                 )
                             }

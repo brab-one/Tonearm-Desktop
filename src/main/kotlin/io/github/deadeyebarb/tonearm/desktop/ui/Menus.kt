@@ -110,7 +110,7 @@ fun DesktopApp.like(song: ConnectSong, like: Boolean) {
 
 /** Asks Brainarr (through Lidarr) for a few albums like the selection, and has Lidarr get them. */
 fun DesktopApp.moreLikeThis(label: String, seeds: List<String>, genres: List<String> = emptyList()) {
-    if (config.state.value.lidarr == null) return message("Connect Lidarr in Settings first")
+    if (lidarr.current.value?.takeUnless { it.limited } == null) return message("Brainarr needs Lidarr: connect it in Settings (or, through the Tonearm server, be one of its admins)")
     message("Asking Brainarr for more like $label… this can take a minute")
     scope.launch {
         attempt {
@@ -131,7 +131,7 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
     val liked = app.likes.isLiked(song)
     add(MenuEntry(if (liked) "Unlike" else "Like") { app.like(song, !liked) })
     if (song.source != ConnectSong.LOCAL) add(MenuEntry("Add to playlist…") { ui.addToPlaylist = listOf(song) })
-    if (song.source == ConnectSong.YOUTUBE && config.lidarr != null) {
+    if (song.source == ConnectSong.YOUTUBE && app.lidarr.current.value != null) {
         add(MenuEntry("Request in Lidarr") {
             app.scope.launch {
                 app.attempt {
@@ -141,7 +141,7 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
             }
         })
     }
-    if (config.lidarr != null) {
+    if (app.lidarr.current.value?.limited == false) {
         add(MenuEntry("More like this (Brainarr)") {
             app.moreLikeThis("“${song.title}”", listOfNotNull(song.artist?.let { "“${song.title}” by $it" }, song.artist))
         })

@@ -242,6 +242,14 @@ private fun LidarrForm(app: DesktopApp, existing: LidarrConfig?) {
         "Requests, downloads and Brainarr's picks; also Tonearm Connect's relay when there's no Tonearm server.",
         style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
     )
+    val current by app.lidarr.current.collectAsState()
+    if (current?.viaServer == true) {
+        Text(
+            "✓ Lidarr comes through the Tonearm server on your music server, which holds its key: nothing to set up here. " +
+                "What you enter below is only used without it." + if (current?.limited == true) " You can request music and see downloads; Brainarr is for its admins." else "",
+            style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent, modifier = Modifier.padding(top = 6.dp),
+        )
+    }
     Field(url, { url = it }, "Lidarr address", "https://lidarr.example.com", KeyboardType.Uri)
     Field(key, { key = it }, if (existing != null) "API key (leave empty to keep)" else "API key (Lidarr → Settings → General)", secret = true)
     Toggle("Use the music server's client certificate", "For a Lidarr behind the same mTLS proxy as the music server.", useServerTls) { useServerTls = it }

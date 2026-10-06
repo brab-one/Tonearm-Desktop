@@ -103,12 +103,12 @@ fun main() {
     }
 }
 
-/** Covers from the music server (through its client certificate) and Lidarr's posters (with its API key). */
+/** Covers from the music server (through its client certificate) and Lidarr's posters (with its API key, or through the Tonearm server). */
 private fun imageCalls(app: DesktopApp) = Call.Factory { request ->
-    val lidarr = app.config.state.value.lidarr
+    val lidarr = app.lidarr.current.value
     if (lidarr != null && LidarrClient.isCoverUrl(lidarr.url, request.url)) {
         val client = if (lidarr.useServerTls) app.sessions.current()?.client ?: app.baseClient else app.baseClient
-        client.forImages().newCall(request.newBuilder().header("X-Api-Key", SecretStore.open(lidarr.keyEnc)).build())
+        client.forImages().newCall(request.newBuilder().header("X-Api-Key", if (lidarr.viaServer) "" else SecretStore.open(lidarr.keyEnc)).build())
     } else {
         val session = app.sessions.current()
         (if (session != null && session.matches(request.url)) session.client else app.baseClient).forImages().newCall(request)

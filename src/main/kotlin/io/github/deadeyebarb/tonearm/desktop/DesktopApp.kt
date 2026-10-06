@@ -1,5 +1,11 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.subsonic.NoServerException
+import io.github.deadeyebarb.tonearm.connect.AiPicks
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
+import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import java.io.File
 import kotlinx.coroutines.delay
@@ -9,7 +15,6 @@ import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.integrations.PlaylistSources
-import io.github.deadeyebarb.tonearm.integrations.MusicBrainz
 import io.github.deadeyebarb.tonearm.integrations.Continuation
 import io.github.deadeyebarb.tonearm.desktop.local.LocalLibrary
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
@@ -49,6 +54,15 @@ class DesktopApp {
     val config = ConfigStore(json)
 
     init {
+        // Notice when the Tonearm server appears, goes, or the music server changes.
+        scope.launch {
+            config.state.map { it.server }.distinctUntilChanged().collectLatest {
+                while (true) {
+                    tonearmServer.refresh(sessions.current())
+                    delay(5 * 60_000L)
+                }
+            }
+        }
         USER_AGENT = "Tonearm/1.3 (Desktop)"
     }
 
@@ -64,7 +78,10 @@ class DesktopApp {
     val sessions = DesktopSessions(config, baseClient)
     val api = SubsonicApi(sessions, json)
     private val integrationHttp = IntegrationHttp(baseClient) { sessions.current()?.client }
-    val lidarr = DesktopLidarr(LidarrClient(integrationHttp, json), api, config)
+    private val connectClient = ConnectClient(integrationHttp, json)
+    /** The Tonearm server at the music server's address: Connect, and Lidarr with its key. */
+    val tonearmServer = ConnectRouter(connectClient)
+    val lidarr = DesktopLidarr(LidarrClient(integrationHttp, json), api, config, tonearmServer, scope)
     val youtube = YouTubeMusic(youtubeClient)
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -76,13 +93,16 @@ class DesktopApp {
 
     val catalog = YouTubeCatalog(youtube)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
-    val songRequests = SongRequests(LidarrClient(integrationHttp, json), MusicBrainz(baseClient, json))
+    val songRequests = SongRequests(LidarrClient(integrationHttp, json))
     val sources = PlaylistSources(youtubeClient, youtube)
     private val continuation = Continuation(api, youtube)
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
-    private val connectClient = ConnectClient(integrationHttp, json)
-    val connect = DesktopConnect(config, connectClient, sessions, lidarr, player, scope).also { it.start() }
+    val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, lidarr, player, scope).also { it.start() }
+
+    /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones. */
+    suspend fun aiPicks(refresh: Boolean = false): AiPicks =
+        connectClient.aiPicks(sessions.current() ?: throw NoServerException(), refresh)
     val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(connectClient, json), connect::route, json, AppDirs.config, ::message)
         .also { it.start() }
     val playlists = DesktopPlaylists(scope, api, sessions, youtube, lidarr, songRequests, json, File(AppDirs.config, "playlist-placeholders.json"), ::message)
@@ -91,6 +111,15 @@ class DesktopApp {
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), json, config.state.value.deviceId, File(AppDirs.config, "weekly-run.json"))
 
     init {
+        // Notice when the Tonearm server appears, goes, or the music server changes.
+        scope.launch {
+            config.state.map { it.server }.distinctUntilChanged().collectLatest {
+                while (true) {
+                    tonearmServer.refresh(sessions.current())
+                    delay(5 * 60_000L)
+                }
+            }
+        }
         // Lidarr's queue and wanted list, for the status tags on songs from outside the library.
         scope.launch {
             while (true) {
@@ -102,7 +131,7 @@ class DesktopApp {
         scope.launch {
             while (true) {
                 val session = sessions.current()
-                val lidarrSetup = lidarr.requireOrNull()
+                val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited }
                 if (session != null && lidarrSetup != null) {
                     runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }.getOrNull()?.let(::message)
                     runCatching { lidarr.tidyLists() }

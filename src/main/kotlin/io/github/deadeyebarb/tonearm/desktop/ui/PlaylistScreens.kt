@@ -200,7 +200,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                     }
                                 }, icon = Icons.Rounded.FavoriteBorder, filled = false)
                             }
-                            if (waiting > 0 && app.config.state.value.lidarr != null) {
+                            if (waiting > 0 && app.lidarr.current.value != null) {
                                 HudButton("Request missing ($waiting)", {
                                     scope.launch {
                                         app.attempt {
@@ -211,7 +211,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                     }
                                 }, icon = Icons.Rounded.CloudDownload, filled = false)
                             }
-                            if (app.config.state.value.lidarr != null) {
+                            if (app.lidarr.current.value != null) {
                                 HudButton("More like this", { scope.launch { app.attempt { moreLikePlaylist(app, id, playlist.name) } } }, icon = Icons.Rounded.AutoAwesome, filled = false)
                             }
                             MoreButton({ playlistMenu(app, nav, ui, id, playlist.name) { refresh++ } }, 40.dp)
@@ -355,7 +355,7 @@ private fun ImportDialog(app: DesktopApp, onDone: (String?) -> Unit) {
                         name, { name = it }, label = { Text("Name in Tonearm") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = hud.accent, unfocusedBorderColor = hud.line),
                     )
-                    if (app.config.state.value.lidarr != null) {
+                    if (app.lidarr.current.value != null) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
                             Checkbox(request, { request = it }, colors = CheckboxDefaults.colors(checkedColor = hud.accent))
                             Text("Request the songs I don't have in Lidarr (their albums)", style = MaterialTheme.typography.bodyMedium)

@@ -86,7 +86,7 @@ class DesktopLikes(
     }
 
     private fun request(ref: TrackRef) {
-        if (!config.state.value.requestLikes || config.state.value.lidarr == null) return
+        if (!config.state.value.requestLikes || lidarr.current.value == null) return
         scope.launch {
             try {
                 val (c, k) = lidarr.require()

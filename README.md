@@ -42,6 +42,8 @@ submodule).
 - mTLS like the phone: a `.p12` client certificate and an optional extra CA. A loopback-only proxy with a
   random path token feeds mpv, so mpv never sees credentials or the certificate
 - **Lidarr**: request artists and albums, follow the downloads
+- **AI picks** (with the Tonearm server and Ollama): albums by artists you don't have, from what you play
+  and like, at the bottom of Home; open one on YouTube Music or request it
 - **Brainarr**: its picks with library/download status, Ask Brainarr, Get, labelling its picks, Play picks
 - **YouTube Music** for what you don't have (in search), with the artist requested in Lidarr when it plays
 - **Tonearm Connect**: with the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your
@@ -76,7 +78,9 @@ and start `Tonearm.bat`). Both include their own Java runtime and `libmpv-2.dll`
 
 On first start, enter the server address, your username and password, and, for mTLS, the same `.p12`
 client certificate as on the phone. Lidarr goes under Settings (address and API key; use the music
-server's client certificate if Lidarr sits behind the same proxy).
+server's client certificate if Lidarr sits behind the same proxy), unless the Tonearm server holds it: then
+it comes through that with your music server login and there's nothing to enter. Liking a YouTube Music
+song asks Lidarr for its album, found in Lidarr's own track lists (the app doesn't contact MusicBrainz).
 
 For Tonearm Connect, run the [Tonearm server](https://github.com/brab-one/Tonearm-Server) at
 `<music server>/connect-tonearm/` (the app finds it; it serves every user with their own login), or install

@@ -37,6 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class DesktopConnect(
     private val config: ConfigStore,
     private val client: ConnectClient,
+    private val router: ConnectRouter,
     private val sessions: DesktopSessions,
     private val lidarr: DesktopLidarr,
     private val player: DesktopPlayer,
@@ -52,7 +53,6 @@ class DesktopConnect(
 
     private val _status = MutableStateFlow<Status>(Status.Off)
     val status: StateFlow<Status> = _status.asStateFlow()
-    private val router = ConnectRouter(client)
     /** Where the last poll went; publishing and goodbyes go the same way. */
     @Volatile private var route: ConnectRoute? = null
     /** The last command seen; null until the first poll on a route, which skips what was queued before. */

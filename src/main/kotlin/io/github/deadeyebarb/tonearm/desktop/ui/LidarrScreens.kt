@@ -79,10 +79,11 @@ private fun NeedsLidarr(nav: Navigator, what: String) =
 @Composable
 fun LidarrScreen(app: DesktopApp, nav: Navigator) {
     val config by app.config.state.collectAsState()
-    if (config.lidarr == null) return NeedsLidarr(nav, "Request artists and albums, and follow the downloads, once Lidarr is connected.")
+    val lidarrConfig by app.lidarr.current.collectAsState()
+    if (lidarrConfig == null) return NeedsLidarr(nav, "Request artists and albums, and follow the downloads, once Lidarr is connected.")
     var tab by rememberSaveable { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        ScreenTitle("Lidarr", config.lidarr?.url)
+        ScreenTitle("Lidarr", lidarrConfig?.let { if (it.viaServer) "through the Tonearm server" else it.url })
         PrimaryTabRow(selectedTabIndex = tab, containerColor = Color.Transparent, modifier = Modifier.padding(horizontal = 28.dp)) {
             Tab(tab == 0, { tab = 0 }, text = { Text("REQUEST", style = MaterialTheme.typography.labelLarge) })
             Tab(tab == 1, { tab = 1 }, text = { Text("DOWNLOADS", style = MaterialTheme.typography.labelLarge) })
@@ -197,11 +198,13 @@ private fun DownloadsTab(app: DesktopApp) {
 fun BrainarrScreen(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
     val config by app.config.state.collectAsState()
-    if (config.lidarr == null) return NeedsLidarr(nav, "Brainarr runs inside Lidarr, so its picks show up here once Lidarr is connected.")
+    val lidarrConfig by app.lidarr.current.collectAsState()
+    if (lidarrConfig == null) return NeedsLidarr(nav, "Brainarr runs inside Lidarr, so its picks show up here once Lidarr is connected.")
+    if (lidarrConfig?.limited == true) return NeedsLidarr(nav, "Lidarr comes through the Tonearm server here, and Brainarr is for its admins.")
     val scope = rememberCoroutineScope()
     val asking by app.lidarr.asking.collectAsState()
     var refresh by remember { mutableStateOf(0) }
-    val loader = rememberLoad(config.lidarr?.url, refresh) { app.lidarr.brainarr() }
+    val loader = rememberLoad(lidarrConfig?.url, refresh) { app.lidarr.brainarr() }
     val inFlight = (loader.state as? Load.Ready)?.value?.picks?.any { it.status == PickStatus.DOWNLOADING } == true
     LaunchedEffect(inFlight) {
         while (inFlight) {
