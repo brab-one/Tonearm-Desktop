@@ -160,7 +160,7 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
                     Text(pick.artist + (pick.year?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium, color = hud.accent2, maxLines = 1)
                     if (pick.because.isNotEmpty()) Text("Because you play " + pick.because.joinToString(" and "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1)
                 }
-                HudButton("More like it", { nav.go(Screen.MoreLike(MoreLikeSeed(pick.artist, pick.artist, aiSeed = "the artist ${pick.artist}"))) }, filled = false)
+                HudButton("More like it", { nav.go(Screen.MoreLike(MoreLikeSeed(pick.artist, pick.artist, aiSeed = "the artist ${pick.artist}", cover = pick.imageUrl))) }, filled = false)
                 if (config.playYouTube) {
                     HudButton("YouTube Music", {
                         scope.launch {

@@ -3,14 +3,12 @@ package io.github.deadeyebarb.tonearm.desktop.connect
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.ConnectCommand
-import io.github.deadeyebarb.tonearm.connect.ConnectPluginMissingException
 import io.github.deadeyebarb.tonearm.connect.ConnectRoute
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.connect.ConnectUnavailableException
 import io.github.deadeyebarb.tonearm.connect.DeviceState
 import io.github.deadeyebarb.tonearm.connect.PlaybackState
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
-import io.github.deadeyebarb.tonearm.desktop.DesktopLidarr
 import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
@@ -31,7 +29,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Makes this player visible to the phone through Tonearm Connect (the Tonearm server next to the music
- * server, or the plugin in Lidarr): announces what it plays, and long-polls for the phone's commands
+ * server): announces what it plays, and long-polls for the phone's commands
  * (play, skip, seek, volume, take a queue…).
  */
 class DesktopConnect(
@@ -39,15 +37,13 @@ class DesktopConnect(
     private val client: ConnectClient,
     private val router: ConnectRouter,
     private val sessions: DesktopSessions,
-    private val lidarr: DesktopLidarr,
     private val player: DesktopPlayer,
     private val scope: CoroutineScope,
 ) {
     sealed interface Status {
         data object Off : Status
         data object Connecting : Status
-        /** [server]: through the Tonearm server rather than Lidarr. */
-        data class Online(val server: Boolean) : Status
+        data object Online : Status
         data class Failed(val message: String) : Status
     }
 
@@ -73,8 +69,8 @@ class DesktopConnect(
         }
     }
 
-    /** The Tonearm server when the music server has one, else the plugin in Lidarr. */
-    suspend fun route(): ConnectRoute = router.route(sessions.current()) { lidarr.requireOrNull() }
+    /** The Tonearm server at the music server's address. */
+    suspend fun route(): ConnectRoute = router.route(sessions.current())
 
     private suspend fun pollLoop() {
         while (true) {
@@ -95,13 +91,10 @@ class DesktopConnect(
                 val from = after ?: client.poll(next, cfg.deviceId, 0, 0).second
                 val (commands, seq) = client.poll(next, cfg.deviceId, from, ConnectClient.POLL_WAIT_SECONDS)
                 after = seq
-                _status.value = Status.Online(next is ConnectRoute.Server)
+                _status.value = Status.Online
                 commands.forEach { apply(it.command) }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: ConnectPluginMissingException) {
-                _status.value = Status.Failed(e.message.orEmpty())
-                delay(30_000)
             } catch (e: ConnectUnavailableException) {
                 _status.value = Status.Failed(e.message.orEmpty())
                 delay(30_000)

@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "io.github.deadeyebarb.tonearm"
-version = "1.7.0"
+version = "1.8.0"
 
 kotlin {
     jvmToolchain(21)
@@ -73,7 +73,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "Tonearm"
-            packageVersion = "1.7.0"
+            packageVersion = "1.8.0"
             description = "Lossless Subsonic player with Lidarr and Brainarr"
             vendor = "Deadeyebarb"
             modules("java.naming", "java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.sql", "java.management", "java.logging")

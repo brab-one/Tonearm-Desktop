@@ -37,7 +37,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.data.ClientCert
-import io.github.deadeyebarb.tonearm.data.LidarrConfig
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.data.TrustedCa
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
@@ -85,7 +84,7 @@ fun SettingsScreen(app: DesktopApp) {
             ServerForm(app, existing = config.server)
 
             SectionHeader("Lidarr")
-            LidarrForm(app, config.lidarr)
+            LidarrStatus(app)
 
             SectionHeader("Playback")
             Toggle("ReplayGain", "Evens out loudness with your files' track gain tags.", config.replayGain) { v ->
@@ -135,17 +134,16 @@ fun SettingsScreen(app: DesktopApp) {
 
             SectionHeader("Tonearm Connect")
             Text(
-                "Lets the Tonearm app on your phone see and control this player, through the Tonearm server next to your music server, or the Tonearm Connect plugin in Lidarr.",
+                "Lets the Tonearm app on your phone see and control this player, through the Tonearm server next to your music server.",
                 style = MaterialTheme.typography.bodyMedium, color = hud.dim,
             )
-            Toggle("Show this player on the phone", "Needs the Tonearm server, or Lidarr with its Tonearm Connect plugin.", config.connect) { v -> app.config.update { it.copy(connect = v) } }
+            Toggle("Show this player on the phone", "Needs the Tonearm server.", config.connect) { v -> app.config.update { it.copy(connect = v) } }
             var name by remember(config.deviceName) { mutableStateOf(config.deviceName) }
             Field(name, { name = it; app.config.update { c -> c.copy(deviceName = it.ifBlank { c.deviceName }) } }, "Name shown on the phone")
             val status by app.connect.status.collectAsState()
             Text(
                 when (val s = status) {
-                    is DesktopConnect.Status.Online ->
-                        "✓ Online through " + (if (s.server) "the Tonearm server" else "Lidarr") + ": the phone can see this player."
+                    DesktopConnect.Status.Online -> "✓ Online through the Tonearm server: the phone can see this player."
                     DesktopConnect.Status.Connecting -> "Connecting…"
                     DesktopConnect.Status.Off -> "Off."
                     is DesktopConnect.Status.Failed -> s.message
@@ -232,52 +230,21 @@ private fun buildServer(existing: ServerConfig?, url: String, user: String, pass
 }
 
 @Composable
-private fun LidarrForm(app: DesktopApp, existing: LidarrConfig?) {
-    val scope = rememberCoroutineScope()
-    var url by remember(existing) { mutableStateOf(existing?.url.orEmpty()) }
-    var key by remember(existing) { mutableStateOf("") }
-    var useServerTls by remember(existing) { mutableStateOf(existing?.useServerTls ?: true) }
-    var test by remember { mutableStateOf<TestState>(TestState.Idle) }
+private fun LidarrStatus(app: DesktopApp) {
+    val current by app.lidarr.current.collectAsState()
     Text(
-        "Requests, downloads and weekly picks; also Tonearm Connect's relay when there's no Tonearm server.",
+        "Requests, downloads, weekly picks and removing music. Lidarr comes through the Tonearm server on your music " +
+            "server, which holds its key, so there's nothing to connect here.",
         style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim,
     )
-    val current by app.lidarr.current.collectAsState()
-    if (current?.viaServer == true) {
-        Text(
-            "✓ Lidarr comes through the Tonearm server on your music server, which holds its key: nothing to set up here. " +
-                "What you enter below is only used without it." + if (current?.limited == true) " You can request music and see downloads; weekly picks are for its admins." else "",
-            style = MaterialTheme.typography.bodyMedium, color = Hud.colors.accent, modifier = Modifier.padding(top = 6.dp),
-        )
-    }
-    Field(url, { url = it }, "Lidarr address", "https://lidarr.example.com", KeyboardType.Uri)
-    Field(key, { key = it }, if (existing != null) "API key (leave empty to keep)" else "API key (Lidarr → Settings → General)", secret = true)
-    Toggle("Use the music server's client certificate", "For a Lidarr behind the same mTLS proxy as the music server.", useServerTls) { useServerTls = it }
-    TestResult(test)
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 12.dp)) {
-        HudButton(if (test == TestState.Running) "Connecting…" else "Test & save", {
-            test = TestState.Running
-            scope.launch {
-                val keyEnc = if (key.isNotEmpty()) SecretStore.seal("lidarr-api-key", key) else existing?.keyEnc.orEmpty()
-                val candidate = (existing ?: LidarrConfig(url = "")).copy(url = url.trim().trimEnd('/'), keyEnc = keyEnc, useServerTls = useServerTls)
-                val previous = app.config.state.value.lidarr
-                test = try {
-                    app.config.update { it.copy(lidarr = candidate) }
-                    app.lidarr.queue()
-                    TestState.Passed("Connected")
-                } catch (e: Exception) {
-                    app.config.update { it.copy(lidarr = previous) }
-                    TestState.Failed(e.userMessage())
-                }
-            }
-        }, enabled = url.isNotBlank() && (key.isNotEmpty() || existing != null) && test != TestState.Running)
-        if (existing != null) {
-            HudButton("Disconnect", {
-                SecretStore.forget(existing.keyEnc)
-                app.config.update { it.copy(lidarr = null) }
-            }, filled = false)
-        }
-    }
+    Text(
+        when {
+            current == null -> "Not available: the Tonearm server needs LIDARR_URL and LIDARR_API_KEY (see its README)."
+            current?.limited == true -> "✓ Through the Tonearm server. You can request music and see downloads; weekly picks and removing music are for its admins."
+            else -> "✓ Through the Tonearm server."
+        },
+        style = MaterialTheme.typography.bodyMedium, color = if (current == null) Hud.colors.danger else Hud.colors.accent, modifier = Modifier.padding(top = 6.dp),
+    )
 }
 
 @Composable

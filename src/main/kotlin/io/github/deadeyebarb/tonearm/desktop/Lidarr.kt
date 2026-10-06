@@ -10,6 +10,7 @@ import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
 import io.github.deadeyebarb.tonearm.integrations.Names
+import io.github.deadeyebarb.tonearm.integrations.SongMatch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -67,4 +68,31 @@ class DesktopLidarr(
     }
 
     fun requireOrNull(): Pair<LidarrConfig, String>? = runCatching { require() }.getOrNull()
+
+    /** Lidarr's monitored albums that it hasn't found yet. */
+    suspend fun wanted() = require().let { (c, k) -> client.wanted(c, k) }
+
+    /** Has Lidarr search for one wanted album now. */
+    suspend fun searchAlbum(albumId: Int) {
+        val (c, k) = require()
+        client.monitorAlbum(c, k, albumId, search = true)
+    }
+
+    /**
+     * Removes an artist, or one of their albums ([album] null: the artist), from Lidarr together with the files.
+     * Returns false when Lidarr doesn't have it (music it doesn't manage has to be removed on the server).
+     */
+    suspend fun remove(artist: String, album: String?): Boolean {
+        val (c, k) = require()
+        val key = Names.normalize(artist)
+        val found = client.artists(c, k).firstOrNull { Names.normalize(it.artistName) == key } ?: return false
+        if (album == null) {
+            client.deleteArtist(c, k, found.id, deleteFiles = true, exclude = false)
+            return true
+        }
+        val title = Names.normalize(SongMatch.cleanTitle(album))
+        val hit = client.albums(c, k, found.id).firstOrNull { Names.normalize(SongMatch.cleanTitle(it.title)) == title } ?: return false
+        client.deleteAlbum(c, k, hit.id, deleteFiles = true, exclude = false)
+        return true
+    }
 }

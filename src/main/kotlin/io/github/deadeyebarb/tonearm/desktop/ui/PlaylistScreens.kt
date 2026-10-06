@@ -136,7 +136,7 @@ private suspend fun moreLikePlaylist(app: DesktopApp, nav: Navigator, id: String
     val artists = playlist.entry.mapNotNull { it.artist }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(6)
     val genres = playlist.entry.mapNotNull { it.genre }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key }.take(3)
     val song = playlist.entry.firstOrNull { it.artist == artists.firstOrNull() }?.toConnectSong()
-    nav.go(Screen.MoreLike(MoreLikeSeed("“$name”", artists.firstOrNull(), song, aiSeed = "the playlist “$name” (${(artists + genres).joinToString()})")))
+    nav.go(Screen.MoreLike(MoreLikeSeed("“$name”", artists.firstOrNull(), song, aiSeed = "the playlist “$name” (${(artists + genres).joinToString()})", cover = playlist.coverArt)))
 }
 
 @Composable
@@ -256,7 +256,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         SongRow(
                             app, song, number = i + 1, playing = state.current?.let { it.id == song.id && it.source == song.source } == true,
                             onPlay = { playFrom(i) }, showCover = false,
-                            tag = if (item.track.request != null) "Requested" else "Not downloaded",
+                            tag = if (item.track.request != null) "Wanted" else "Not downloaded",
                             requested = item.track.requestedAlbum?.let { it to (item.track.requestedArtist ?: ref.artist) },
                             extraMenu = listOf(
                                 MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removePending(id, item.track) } } },

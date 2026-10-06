@@ -1,5 +1,10 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.likes.findSong
+import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.integrations.SearchRank
+import io.github.deadeyebarb.tonearm.connect.WebSearch
+import io.github.deadeyebarb.tonearm.connect.AiSearch
 import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
@@ -100,7 +105,7 @@ class DesktopApp {
     private val continuation = Continuation(api, youtube)
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
-    val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, lidarr, player, scope).also { it.start() }
+    val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
 
     /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones, a [seed] for ones like that. */
     suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks =
@@ -163,8 +168,9 @@ class DesktopApp {
     suspend fun similarArtists(artist: String, libraryId: String?): List<SimilarArtist> {
         val session = sessions.current() ?: return emptyList()
         if (tonearmServer.refresh(session)?.discovery == true) return connectClient.similarArtists(session, artist)
+        // Library artists have a cover id; the others may have a picture URL from the server's agents.
         return libraryId?.let { api.artistInfo(it, includeNotPresent = true) }?.similarArtist.orEmpty()
-            .map { SimilarArtist(it.name, inLibrary = it.inLibrary) }
+            .map { SimilarArtist(it.name, imageUrl = if (it.inLibrary) it.coverArt else it.artistImageUrl?.takeIf { u -> u.startsWith("https://") }, inLibrary = it.inLibrary) }
     }
 
     /**
@@ -177,6 +183,28 @@ class DesktopApp {
         val last = Song(id = seed.id, title = seed.title, artist = seed.artist, album = seed.album, duration = seed.duration)
         val next = continuation.similar(last, seed.source == ConnectSong.YOUTUBE, sessions.current(), setOf(Continuation.key(seed.id, seed.source == ConnectSong.YOUTUBE)), cfg.playYouTube)
         return listOf(seed) + next.map { if (it.youtube) it.song.toConnectSong(ConnectSong.YOUTUBE) else it.song.toConnectSong() }
+    }
+
+    /** Deezer's matches for a search, through the Tonearm server (null without its discovery). */
+    suspend fun webSearch(query: String): WebSearch? {
+        val session = sessions.current() ?: return null
+        if (tonearmServer.refresh(session)?.discovery != true) return null
+        return connectClient.webSearch(session, query)
+    }
+
+    /** What the server's AI makes of a search; running until it has answered. */
+    suspend fun aiSearch(query: String): AiSearch = connectClient.aiSearch(sessions.current() ?: throw NoServerException(), query)
+
+    /** Plays a song known by name: the library's copy if it has one, else YouTube Music's, then songs like it. */
+    suspend fun playFound(artist: String, title: String) {
+        val session = sessions.current()
+        val own = session?.let { runCatching { api.findSong(TrackRef(title, artist), it) }.getOrNull() }
+        val first = own?.toConnectSong() ?: run {
+            val query = "$artist $title"
+            youtube.searchSongs(query, 5).maxByOrNull { SearchRank.score(query, it.title, it.artist) }
+                ?.takeIf { SearchRank.score(query, it.title, it.artist) >= SearchRank.GOOD }?.toConnectSong(ConnectSong.YOUTUBE)
+        } ?: return message("“$title” isn't on YouTube Music")
+        player.play(similarSongs(first, null))
     }
 
     /** "When the queue ends": more of the same, or another playlist. */

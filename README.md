@@ -44,6 +44,10 @@ submodule).
 - mTLS like the phone: a `.p12` client certificate and an optional extra CA. A loopback-only proxy with a
   random path token feeds mpv, so mpv never sees credentials or the certificate
 - **Lidarr**: request artists and albums, follow the downloads
+- **Search** across the library, YouTube Music and Deezer at once, best matches first whatever the source,
+  with "Ask the AI" for searches that describe music
+- **Remove from server**: an album or artist goes from Lidarr with its files, and Navidrome after its scan
+- **Wanted** tab on the Lidarr screen: what Lidarr is still looking for, each searchable again
 - **Discover** (with the Tonearm server): discovery picks (artists you don't have that yours point to, from
   Deezer's related artists, each with an album) and AI picks (from your Ollama); open one on YouTube Music
   or request it

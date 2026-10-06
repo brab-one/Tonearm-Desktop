@@ -81,8 +81,48 @@ fun LidarrScreen(app: DesktopApp, nav: Navigator) {
         PrimaryTabRow(selectedTabIndex = tab, containerColor = Color.Transparent, modifier = Modifier.padding(horizontal = 28.dp)) {
             Tab(tab == 0, { tab = 0 }, text = { Text("REQUEST", style = MaterialTheme.typography.labelLarge) })
             Tab(tab == 1, { tab = 1 }, text = { Text("DOWNLOADS", style = MaterialTheme.typography.labelLarge) })
+            Tab(tab == 2, { tab = 2 }, text = { Text("WANTED", style = MaterialTheme.typography.labelLarge) })
         }
-        if (tab == 0) RequestTab(app) else DownloadsTab(app)
+        when (tab) {
+            0 -> RequestTab(app)
+            1 -> DownloadsTab(app)
+            else -> WantedTab(app)
+        }
+    }
+}
+
+/** What Lidarr wants but hasn't found yet: monitored albums without their files, each searchable again. */
+@Composable
+private fun WantedTab(app: DesktopApp) {
+    val hud = Hud.colors
+    val scope = rememberCoroutineScope()
+    var refresh by remember { mutableIntStateOf(0) }
+    val loader = rememberLoad(refresh) { app.lidarr.wanted().sortedByDescending { it.releaseDate.orEmpty() } }
+    LoadContent(loader) { albums ->
+        if (albums.isEmpty()) {
+            EmptyState(Icons.Rounded.CloudDownload, "Nothing wanted", "Everything Lidarr monitors is on your server.")
+            return@LoadContent
+        }
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(28.dp)) {
+            item {
+                Text("${albums.size} albums Lidarr is still looking for", style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(bottom = 8.dp))
+            }
+            items(albums, key = { it.id }) { album ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Cover(app, album.remoteCover ?: album.images.firstOrNull { it.coverType.equals("cover", true) }?.remoteUrl, Modifier.size(48.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(album.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOfNotNull(album.artist?.artistName, album.albumType, album.releaseDate?.take(4)).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall, color = hud.accent2, maxLines = 1,
+                        )
+                    }
+                    HudButton("Search now", {
+                        scope.launch { app.attempt { app.lidarr.searchAlbum(album.id); app.message("Lidarr is searching for ${album.title}") } }
+                    }, filled = false)
+                }
+            }
+        }
     }
 }
 
@@ -102,7 +142,7 @@ private fun RequestTab(app: DesktopApp) {
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).onKeyEvent { if (it.key == Key.Enter) { submitted = query.trim(); true } else false },
         )
         if (submitted.isEmpty()) {
-            EmptyState(Icons.Rounded.CloudDownload, "Request music", "Search MusicBrainz through Lidarr. Requests use the Lidarr defaults from Settings.")
+            EmptyState(Icons.Rounded.CloudDownload, "Request music", "Search MusicBrainz through Lidarr. Requests use Lidarr's own defaults.")
             return@Column
         }
         val loader = rememberLoad(submitted) { app.lidarr.search(submitted) }

@@ -33,5 +33,5 @@ fun rememberFetchState(app: DesktopApp, song: ConnectSong, requested: Pair<Strin
 fun FetchState.label(): String = when (fetch) {
     Fetch.IN_LIBRARY -> "In your library"
     Fetch.DOWNLOADING -> "Downloading" + (progress?.let { " ${(it * 100).toInt()}%" } ?: "")
-    Fetch.REQUESTED -> "Requested"
+    Fetch.REQUESTED -> "Wanted"
 }

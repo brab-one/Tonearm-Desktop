@@ -211,7 +211,7 @@ fun LocalAlbumScreen(app: DesktopApp, nav: Navigator, key: String) {
         songs = songs,
         buttons = {
             HudButton("More like this", {
-                nav.go(Screen.MoreLike(MoreLikeSeed("“${album.title}”", album.artist, aiSeed = "the album “${album.title}” by ${album.artist}")))
+                nav.go(Screen.MoreLike(MoreLikeSeed("“${album.title}”", album.artist, aiSeed = "the album “${album.title}” by ${album.artist}", cover = album.cover)))
             }, icon = Icons.Rounded.AutoAwesome, filled = false)
         },
     )
@@ -245,7 +245,7 @@ fun YouTubeArtistScreen(app: DesktopApp, nav: Navigator, artist: YtArtist) {
                     HudButton("Request", { scope.launch { app.attempt { app.message(if (app.lidarr.requestExactArtist(page.artist.name)) "Requested ${page.artist.name} in Lidarr" else "Lidarr has ${page.artist.name} already, or no exact match") } } }, icon = Icons.Rounded.CloudDownload, filled = false)
                 }
                 HudButton("More like this", {
-                    nav.go(Screen.MoreLike(MoreLikeSeed(page.artist.name, page.artist.name, aiSeed = "the artist ${page.artist.name}")))
+                    nav.go(Screen.MoreLike(MoreLikeSeed(page.artist.name, page.artist.name, aiSeed = "the artist ${page.artist.name}", cover = page.artist.imageUrl)))
                 }, icon = Icons.Rounded.AutoAwesome, filled = false)
                 if ((page.description?.length ?: 0) >= 400) HudButton(if (expanded) "Less" else "More about them", { expanded = !expanded }, filled = false)
             },
@@ -296,6 +296,10 @@ fun YouTubeAlbumScreen(app: DesktopApp, nav: Navigator, album: YtAlbum) {
                         }
                     }, icon = Icons.Rounded.CloudDownload, filled = false)
                 }
+                HudButton("More like this", {
+                    val artist = page.album.artist
+                    nav.go(Screen.MoreLike(MoreLikeSeed("“${page.album.title}”", artist, aiSeed = "the album “${page.album.title}”" + (artist?.let { " by $it" } ?: ""), cover = page.album.imageUrl)))
+                }, icon = Icons.Rounded.AutoAwesome, filled = false)
             },
         )
     }

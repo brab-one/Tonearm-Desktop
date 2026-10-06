@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -21,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
@@ -44,21 +47,26 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.github.deadeyebarb.tonearm.connect.AiSearch
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
+import io.github.deadeyebarb.tonearm.connect.WebSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.Names
+import io.github.deadeyebarb.tonearm.integrations.SearchRank
+import io.github.deadeyebarb.tonearm.integrations.SongMatch
 import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
-import androidx.compose.material.icons.rounded.AutoAwesome
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -108,6 +116,7 @@ private fun albumLike(album: Album) = MoreLikeSeed(
     label = "“${album.name}”",
     artist = album.artistLabel.ifEmpty { null },
     artistId = album.artistId,
+    cover = album.coverArt,
     aiSeed = "the album “${album.name}”" + album.artistLabel.takeIf { it.isNotEmpty() }?.let { " by $it" }.orEmpty() + album.genre?.let { " ($it)" }.orEmpty(),
 )
 
@@ -127,6 +136,9 @@ private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album
     add(MenuEntry("Add to playlist…") { songs { ui.addToPlaylist = it } })
     add(MenuEntry("More like this") { nav.go(Screen.MoreLike(albumLike(album))) })
     album.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
+    if (app.canRemoveMusic && album.artistLabel.isNotEmpty()) {
+        add(MenuEntry("Remove from server…") { app.removeFromServer(ui, album.artistLabel, album.name) { if (nav.current == Screen.Album(album.id)) nav.back() } })
+    }
 }
 
 @Composable
@@ -148,6 +160,7 @@ fun ArtistsScreen(app: DesktopApp, nav: Navigator) {
 
 @Composable
 fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
+    val ui = LocalUi.current
     val scope = rememberCoroutineScope()
     val config by app.config.state.collectAsState()
     val lidarrConfig by app.lidarr.current.collectAsState()
@@ -170,8 +183,11 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                             HudButton("More like this", {
                                 val genres = albums.mapNotNull { it.genre }.distinct().take(3)
                                 val seed = "the artist ${artist.name}" + if (genres.isEmpty()) "" else " (${genres.joinToString()})"
-                                nav.go(Screen.MoreLike(MoreLikeSeed(artist.name, artist.name, artistId = artist.id, aiSeed = seed)))
+                                nav.go(Screen.MoreLike(MoreLikeSeed(artist.name, artist.name, artistId = artist.id, aiSeed = seed, cover = artist.coverArt)))
                             }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                            if (app.canRemoveMusic) {
+                                HudButton("Remove from server…", { app.removeFromServer(ui, artist.name, null) { nav.back() } }, icon = Icons.Rounded.Delete, filled = false)
+                            }
                         }
                     }
                 }
@@ -293,6 +309,40 @@ private fun TrackListPage(
 }
 
 
+/**
+ * The songs that fit the search best, whatever their source: the library, YouTube Music or Deezer. On a tie
+ * the library's copy wins, so YouTube Music and Deezer only come first when they have a better match.
+ * Each comes as (key, ConnectSong or WebSong).
+ */
+private fun bestMatches(query: String, library: List<ConnectSong>, youtube: List<ConnectSong>, web: List<WebSong>): List<Pair<String, Any>> {
+    fun key(artist: String?, title: String) = Names.normalize(artist.orEmpty()) + "|" + Names.normalize(SongMatch.cleanTitle(title))
+    val scored = library.map { Triple(key(it.artist, it.title) to (it as Any), SearchRank.score(query, it.title, it.artist, it.album), 0) } +
+        youtube.map { Triple(key(it.artist, it.title) to (it as Any), SearchRank.score(query, it.title, it.artist, it.album), 1) } +
+        web.map { Triple(key(it.artist, it.title) to (it as Any), SearchRank.score(query, it.title, it.artist, it.album), 2) }
+    val seen = HashSet<String>()
+    return scored.filter { it.second >= SearchRank.GOOD }
+        .sortedWith(compareByDescending<Triple<Pair<String, Any>, Double, Int>> { it.second }.thenBy { it.third })
+        .map { it.first }
+        .filter { seen.add(it.first) }
+        .take(5)
+}
+
+/** A song or album known only by name (Deezer, the AI); clicking plays or opens it from the library or YouTube Music. */
+@Composable
+private fun FoundRow(app: DesktopApp, title: String, subtitle: String, note: String, cover: String?, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Cover(app, cover, Modifier.size(44.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(note, style = MaterialTheme.typography.labelSmall, color = Hud.colors.accent2, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 360.dp))
+    }
+}
+
 @Composable
 fun SearchScreen(app: DesktopApp, nav: Navigator) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -333,6 +383,27 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
             }
         }
         val localHits = remember(q, app.local.tracks.collectAsState().value) { app.local.search(q).take(50).map { it.toConnectSong() } }
+        val server by app.tonearmServer.server.collectAsState()
+        val web = rememberLoad(q, server?.discovery) {
+            delay(400)
+            runCatching { app.webSearch(q) }.getOrNull()
+        }
+        var askAi by remember(q) { mutableStateOf(false) }
+        var ai by remember(q) { mutableStateOf<AiSearch?>(null) }
+        LaunchedEffect(q, askAi) {
+            if (!askAi) return@LaunchedEffect
+            while (true) {
+                ai = try {
+                    app.aiSearch(q)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AiSearch(q, problem = e.userMessage())
+                }
+                if (ai?.running != true) break
+                delay(4_000)
+            }
+        }
         LoadContent(library) { result ->
             val have = result.song.map { Names.key(it.artist.orEmpty(), it.title) }.toSet()
             val yt = ((youtube.state as? Load.Ready)?.value).orEmpty().filter { Names.key(it.artist.orEmpty(), it.title) !in have }
@@ -343,7 +414,48 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                 EmptyState(Icons.Rounded.SearchOff, "Nothing found for “$q”", "Request it from the Lidarr page.")
                 return@LoadContent
             }
+            val webSongs = ((web.state as? Load.Ready)?.value)?.songs.orEmpty()
+            val best = remember(result, yt, webSongs) { bestMatches(q, songs, ytQueue, webSongs) }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+                if (best.isNotEmpty()) {
+                    item { SectionHeader("Best matches") }
+                    items(best, key = { "best:" + it.first }) { (_, match) ->
+                        when (match) {
+                            is ConnectSong -> SongRow(app, match, number = null, playing = state.current?.id == match.id, onPlay = {
+                                if (match.source == ConnectSong.YOUTUBE) app.scope.launch { app.attempt { app.player.play(app.similarSongs(match, null)) } } else app.player.play(listOf(match))
+                            }, showCover = true)
+                            is WebSong -> FoundRow(app, match.title, "${match.artist}${match.album?.let { " · $it" } ?: ""}", "Deezer · plays from YouTube Music", match.coverUrl) {
+                                app.scope.launch { app.attempt { app.playFound(match.artist, match.title) } }
+                            }
+                        }
+                    }
+                }
+                if (server?.recommendations == true) {
+                    item {
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            val current = ai
+                            when {
+                                !askAi -> HudButton("Ask the AI about “$q”", { askAi = true }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                                current == null || current.running -> Text("The AI is thinking… (it can take a minute)", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim)
+                                current.problem != null -> Text("AI: ${current.problem}", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.danger)
+                                current.hits.isEmpty() -> Text("The AI found nothing for this.", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim)
+                                else -> {
+                                    SectionHeader("The AI suggests")
+                                    current.hits.forEach { hit ->
+                                        FoundRow(app, hit.title ?: hit.album.orEmpty(), hit.artist + if (hit.title == null) " · album" else "", hit.why, null) {
+                                            app.scope.launch {
+                                                app.attempt {
+                                                    if (hit.title != null) app.playFound(hit.artist, hit.title)
+                                                    else app.catalog.findAlbum(hit.artist, hit.album.orEmpty())?.let { nav.go(Screen.YouTubeAlbum(it)) } ?: app.message("“${hit.album}” isn't on YouTube Music")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if (result.artist.isNotEmpty()) {
                     item {
                         SectionHeader("Artists")

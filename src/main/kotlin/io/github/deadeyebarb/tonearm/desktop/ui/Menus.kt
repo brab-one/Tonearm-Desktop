@@ -108,6 +108,31 @@ fun DesktopApp.like(song: ConnectSong, like: Boolean) {
     scope.launch { attempt { likes.set(song, like) } }
 }
 
+/** Whether music can be removed from the server here: through Lidarr, with the right to delete in it. */
+val DesktopApp.canRemoveMusic: Boolean get() = lidarr.current.value?.limited == false
+
+/**
+ * Removes an artist, or one of their albums, from the server: Lidarr deletes it with its files, and Navidrome
+ * is asked to rescan so it's gone there too. Asks for the name first. [after] runs once it's done.
+ */
+fun DesktopApp.removeFromServer(ui: UiState, artist: String, album: String?, after: () -> Unit = {}) {
+    val name = album ?: artist
+    ui.prompt = Prompt(
+        "Remove “$name” from the server?",
+        "Its files are deleted. Type the name to confirm", "", "Remove",
+    ) { typed ->
+        if (typed.trim() != name) return@Prompt message("The name didn't match; nothing removed")
+        scope.launch {
+            attempt {
+                if (!lidarr.remove(artist, album)) return@attempt message("Lidarr doesn't have “$name”, so it can't remove it; delete its files on the server")
+                runCatching { api.startScan() }
+                message("Removed “$name”; Navidrome drops it after its scan")
+                after()
+            }
+        }
+    }
+}
+
 /** Whether "more like this" can be asked: the Tonearm server has an AI for picks. */
 val DesktopApp.canAskMoreLike: Boolean get() = tonearmServer.server.value?.recommendations == true
 
@@ -141,7 +166,7 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
         })
     }
     add(MenuEntry("More like this") {
-        nav.go(Screen.MoreLike(MoreLikeSeed("“${song.title}”", song.artist, song, aiSeed = "the song “${song.title}”" + (song.artist?.let { " by $it" } ?: ""))))
+        nav.go(Screen.MoreLike(MoreLikeSeed("“${song.title}”", song.artist, song, aiSeed = "the song “${song.title}”" + (song.artist?.let { " by $it" } ?: ""), cover = song.coverArt)))
     })
     when (song.source) {
         ConnectSong.SERVER -> {
