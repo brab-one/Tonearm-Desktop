@@ -49,7 +49,7 @@ class DesktopApp {
     val config = ConfigStore(json)
 
     init {
-        USER_AGENT = "Tonearm/1.2 (Desktop)"
+        USER_AGENT = "Tonearm/1.3 (Desktop)"
     }
 
     val baseClient: OkHttpClient = OkHttpClient.Builder()

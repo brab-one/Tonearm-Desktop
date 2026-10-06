@@ -92,7 +92,7 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
                 item(key = type.name) {
                     Column {
                         SectionHeader(type.title)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CardRow {
                             items(albums, key = { it.id }) { album -> AlbumCard(app, nav, album) }
                         }
                     }
@@ -344,13 +344,13 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                 if (result.artist.isNotEmpty()) {
                     item {
                         SectionHeader("Artists")
-                        LazyRow { items(result.artist, key = { it.id }) { a -> CardItem(app, a.coverArt, a.name, null, { nav.go(Screen.Artist(a.id)) }, round = true, width = 150.dp) } }
+                        CardRow { items(result.artist, key = { it.id }) { a -> CardItem(app, a.coverArt, a.name, null, { nav.go(Screen.Artist(a.id)) }, round = true, width = 150.dp) } }
                     }
                 }
                 if (result.album.isNotEmpty()) {
                     item {
                         SectionHeader("Albums")
-                        LazyRow { items(result.album, key = { it.id }) { a -> AlbumCard(app, nav, a) } }
+                        CardRow { items(result.album, key = { it.id }) { a -> AlbumCard(app, nav, a) } }
                     }
                 }
                 if (songs.isNotEmpty()) {
@@ -368,13 +368,13 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                 if (ytArtists.isNotEmpty()) {
                     item {
                         SectionHeader("Artists on YouTube Music")
-                        LazyRow { items(ytArtists, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.name, "YouTube Music", { nav.go(Screen.YouTubeArtist(a)) }, round = true, width = 150.dp) } }
+                        CardRow { items(ytArtists, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.name, "YouTube Music", { nav.go(Screen.YouTubeArtist(a)) }, round = true, width = 150.dp) } }
                     }
                 }
                 if (ytAlbums.isNotEmpty()) {
                     item {
                         SectionHeader("Albums on YouTube Music")
-                        LazyRow { items(ytAlbums, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, a.artist, { nav.go(Screen.YouTubeAlbum(a)) }) } }
+                        CardRow { items(ytAlbums, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, a.artist, { nav.go(Screen.YouTubeAlbum(a)) }) } }
                     }
                 }
                 if (config.playYouTube) {

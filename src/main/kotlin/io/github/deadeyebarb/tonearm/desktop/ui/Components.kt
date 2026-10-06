@@ -1,5 +1,20 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
+import kotlinx.coroutines.launch
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.HorizontalScrollbar
 import io.github.deadeyebarb.tonearm.integrations.Fetch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -230,6 +245,8 @@ fun SongRow(
     val isLiked = io.github.deadeyebarb.tonearm.desktop.DesktopLikes.key(song.source, song.id) in liked
     val menu = { songMenu(app, nav, ui, song, extraMenu) }
     val fetch = rememberFetchState(app, song, requested)
+    // Held here: once its menu opens the row isn't hovered anymore, and the button must stay.
+    var menuOpen by remember { mutableStateOf(false) }
     MenuArea(menu) {
     Row(
         modifier.fillMaxWidth()
@@ -267,7 +284,7 @@ fun SongRow(
             if (hovered || isLiked) LikeButton(app, song, 32.dp)
         }
         Text(song.duration?.let { formatDuration(it.toLong()) }.orEmpty(), style = MaterialTheme.typography.labelMedium, color = hud.dim, modifier = Modifier.width(48.dp), textAlign = TextAlign.End)
-        Box(Modifier.width(32.dp)) { if (hovered) MoreButton(menu) }
+        Box(Modifier.width(32.dp)) { if (hovered || menuOpen) MoreButton(menu, menuOpen, { menuOpen = it }) }
         trailing()
     }
     }
@@ -293,6 +310,56 @@ fun CardItem(app: DesktopApp, coverId: String?, title: String, subtitle: String?
         if (subtitle != null) {
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = if (round) TextAlign.Center else TextAlign.Start, modifier = Modifier.fillMaxWidth())
         }
+    }
+}
+
+/**
+ * A horizontal row of cards that works with a mouse: arrows at the edges while the pointer is over it,
+ * a scrollbar underneath, click-and-drag, and Shift + wheel.
+ */
+@Composable
+fun CardRow(modifier: Modifier = Modifier, content: LazyListScope.() -> Unit) {
+    val hud = Hud.colors
+    val state = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    var width by remember { mutableIntStateOf(0) }
+    Box(modifier.fillMaxWidth().hoverable(hover).onSizeChanged { width = it.width }) {
+        LazyRow(
+            state = state,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                .draggable(rememberDraggableState { delta -> state.dispatchRawDelta(-delta) }, Orientation.Horizontal),
+            content = content,
+        )
+        HorizontalScrollbar(
+            rememberScrollbarAdapter(state),
+            Modifier.align(Alignment.BottomStart).fillMaxWidth(),
+            style = LocalScrollbarStyle.current.copy(unhoverColor = hud.line, hoverColor = hud.accent.copy(alpha = 0.7f), thickness = 6.dp),
+        )
+        if (hovered && state.canScrollBackward) {
+            RowArrow(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Scroll left", Modifier.align(Alignment.CenterStart)) {
+                scope.launch { state.animateScrollBy(-width * 0.8f) }
+            }
+        }
+        if (hovered && state.canScrollForward) {
+            RowArrow(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "Scroll right", Modifier.align(Alignment.CenterEnd)) {
+                scope.launch { state.animateScrollBy(width * 0.8f) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowArrow(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+    val hud = Hud.colors
+    Box(
+        modifier.padding(horizontal = 4.dp).size(44.dp).clip(CircleShape).background(hud.panelHigh.copy(alpha = 0.92f))
+            .border(1.dp, hud.accent.copy(alpha = 0.6f), CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, label, tint = hud.accent, modifier = Modifier.size(28.dp))
     }
 }
 

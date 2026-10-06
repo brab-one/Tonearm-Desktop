@@ -253,7 +253,7 @@ fun YouTubeArtistScreen(app: DesktopApp, nav: Navigator, artist: YtArtist) {
                 if (page.albums.isNotEmpty()) {
                     item {
                         SectionHeader("Albums")
-                        LazyRow { items(page.albums, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, a.artist, { nav.go(Screen.YouTubeAlbum(a)) }) } }
+                        CardRow { items(page.albums, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, a.artist, { nav.go(Screen.YouTubeAlbum(a)) }) } }
                     }
                 }
             },
@@ -317,7 +317,7 @@ fun MoreOnYouTube(app: DesktopApp, nav: Navigator, name: String, have: List<Stri
         if (missing.isEmpty()) {
             Text("You have every album YouTube Music lists for $name.", style = MaterialTheme.typography.bodySmall, color = Hud.colors.dim)
         } else {
-            LazyRow { items(missing, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, "Not in your library", { nav.go(Screen.YouTubeAlbum(a)) }) } }
+            CardRow { items(missing, key = { it.url }) { a -> CardItem(app, a.imageUrl, a.title, "Not in your library", { nav.go(Screen.YouTubeAlbum(a)) }) } }
         }
     }
 }

@@ -71,14 +71,20 @@ fun MenuArea(entries: () -> List<MenuEntry>, content: @Composable () -> Unit) =
 @Composable
 fun MoreButton(entries: () -> List<MenuEntry>, size: Dp = 32.dp) {
     var open by remember { mutableStateOf(false) }
+    MoreButton(entries, open, { open = it }, size)
+}
+
+/** With the open state held by the caller, e.g. a row that shows the button only on hover. */
+@Composable
+fun MoreButton(entries: () -> List<MenuEntry>, open: Boolean, onOpenChange: (Boolean) -> Unit, size: Dp = 32.dp) {
     Box {
-        IconButton(onClick = { open = true }, modifier = Modifier.size(size)) {
-            Icon(Icons.Rounded.MoreHoriz, "More", tint = Hud.colors.dim, modifier = Modifier.size(18.dp))
+        IconButton(onClick = { onOpenChange(true) }, modifier = Modifier.size(size)) {
+            Icon(Icons.Rounded.MoreHoriz, "More", tint = if (open) Hud.colors.accent else Hud.colors.dim, modifier = Modifier.size(18.dp))
         }
-        DropdownMenu(open, { open = false }, modifier = Modifier.background(Hud.colors.panelHigh)) {
+        DropdownMenu(open, { onOpenChange(false) }, modifier = Modifier.background(Hud.colors.panelHigh)) {
             for (entry in entries()) {
                 DropdownMenuItem(text = { Text(entry.label, style = MaterialTheme.typography.bodyMedium) }, onClick = {
-                    open = false
+                    onOpenChange(false)
                     entry.action()
                 })
             }
