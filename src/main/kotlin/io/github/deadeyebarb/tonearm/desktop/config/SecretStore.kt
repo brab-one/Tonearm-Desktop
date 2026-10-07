@@ -10,34 +10,51 @@ import java.util.concurrent.TimeUnit
  * neither is available the secret stays in the config file, which only the user can read.
  *
  * The config holds a sealed reference: `keyring:<name>`, `dpapi:<base64>` or `file:<base64>`.
+ * TONEARM_KEYRING=off leaves the keyring alone (test setups: its entries are shared by every Tonearm on the account).
  */
 object SecretStore {
+    private val keyringOff = System.getenv("TONEARM_KEYRING")?.lowercase() == "off"
+
     private val secretTool: Boolean by lazy {
-        !AppDirs.isWindows && runCatching { ProcessBuilder("secret-tool", "--version").start().waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
+        !AppDirs.isWindows && !keyringOff && runCatching { ProcessBuilder("secret-tool", "--version").start().waitFor(5, TimeUnit.SECONDS) }.getOrDefault(false)
     }
 
     fun seal(name: String, secret: String): String {
         if (secret.isEmpty()) return ""
-        if (AppDirs.isWindows) return "dpapi:" + b64(Crypt32Util.cryptProtectData(secret.encodeToByteArray()))
-        if (secretTool && storeInKeyring(name, secret)) return "keyring:$name"
-        return "file:" + b64(secret.encodeToByteArray())
+        val sealed = when {
+            AppDirs.isWindows -> "dpapi:" + b64(Crypt32Util.cryptProtectData(secret.encodeToByteArray()))
+            secretTool && storeInKeyring(name, secret) -> "keyring:$name"
+            else -> "file:" + b64(secret.encodeToByteArray())
+        }
+        // The keyring entry keeps its name, so what was read from it before is stale now.
+        opened[sealed] = secret
+        changes++
+        return sealed
     }
 
     private val opened = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-    fun open(sealed: String): String = opened.getOrPut(sealed) { unseal(sealed) }
+    /** Goes up whenever a secret is replaced, so whatever was built with the old one can be rebuilt. */
+    @Volatile var changes = 0
+        private set
 
-    private fun unseal(sealed: String): String = when {
+    /** The secret behind [sealed], or null when the keyring didn't answer: not remembered, so it's asked again next time. */
+    fun read(sealed: String): String? = opened[sealed] ?: unseal(sealed)?.also { opened[sealed] = it }
+
+    /** Like [read], with "" when the keyring didn't answer. */
+    fun open(sealed: String): String = read(sealed).orEmpty()
+
+    private fun unseal(sealed: String): String? = when {
         sealed.isEmpty() -> ""
         sealed.startsWith("dpapi:") -> Crypt32Util.cryptUnprotectData(unb64(sealed.removePrefix("dpapi:"))).decodeToString()
-        sealed.startsWith("keyring:") -> lookup(sealed.removePrefix("keyring:")).orEmpty()
+        sealed.startsWith("keyring:") -> if (keyringOff) null else lookup(sealed.removePrefix("keyring:"))
         sealed.startsWith("file:") -> unb64(sealed.removePrefix("file:")).decodeToString()
         else -> ""
     }
 
     fun forget(sealed: String) {
         opened.remove(sealed)
-        if (sealed.startsWith("keyring:")) {
+        if (sealed.startsWith("keyring:") && !keyringOff) {
             runCatching { run("secret-tool", "clear", "application", "tonearm", "name", sealed.removePrefix("keyring:")) }
         }
     }
@@ -48,7 +65,14 @@ object SecretStore {
         process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0 && lookup(name) == secret
     }.getOrDefault(false)
 
-    private fun lookup(name: String): String? = runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }.getOrNull()
+    /** A few tries: right after login, or while the keyring is being updated, it may not answer yet. */
+    private fun lookup(name: String): String? {
+        repeat(3) { attempt ->
+            runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }.getOrNull()?.let { return it }
+            if (attempt < 2) Thread.sleep(400)
+        }
+        return null
+    }
 
     private fun run(vararg command: String): String {
         val process = ProcessBuilder(*command).start()

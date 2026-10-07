@@ -101,6 +101,8 @@ fun main() {
             TonearmTheme { TonearmApp(app, nav) }
         }
     }
+    // Background work (Connect's polling, HTTP threads) would otherwise keep the process alive without a window.
+    exitProcess(0)
 }
 
 /** Covers from the music server (through its client certificate) and Lidarr's posters (with its API key, or through the Tonearm server). */

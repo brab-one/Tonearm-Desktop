@@ -17,12 +17,18 @@ import java.io.File
 
 /** The configured server's session: its secret and an OkHttp client with the mTLS identity and trust. */
 class DesktopSessions(private val config: ConfigStore, private val base: OkHttpClient) : ActiveServer {
-    @Volatile private var cached: Pair<ServerConfig, ServerSession>? = null
+    private data class Built(val server: ServerConfig, val secrets: Int, val session: ServerSession)
+    @Volatile private var cached: Built? = null
 
     fun current(): ServerSession? {
         val server = config.state.value.server ?: return null
-        cached?.takeIf { it.first == server }?.let { return it.second }
-        return build(server).also { cached = server to it }
+        cached?.takeIf { it.server == server && it.secrets == SecretStore.changes }?.let { return it.session }
+        val secrets = SecretStore.changes
+        val password = SecretStore.read(server.secretEnc)
+        val session = ServerSession(server, password.orEmpty(), clientFor(server, base))
+        // Without its password (the keyring didn't answer) it's used this once and built again next time.
+        if (password != null) cached = Built(server, secrets, session)
+        return session
     }
 
     override suspend fun awaitActive(): ServerSession = current() ?: throw NoServerException()
@@ -39,7 +45,9 @@ class DesktopSessions(private val config: ConfigStore, private val base: OkHttpC
     companion object {
         fun clientFor(server: ServerConfig, base: OkHttpClient): OkHttpClient {
             val identity = (server.clientCert as? ClientCert.Pkcs12File)?.let { cert ->
-                Certs.loadPkcs12(File(AppDirs.config, cert.fileName).readBytes(), SecretStore.open(cert.passwordEnc).toCharArray())
+                val password = SecretStore.read(cert.passwordEnc)
+                    ?: throw java.io.IOException("Couldn't read the client certificate's password from the keyring; is it unlocked?")
+                Certs.loadPkcs12(File(AppDirs.config, cert.fileName).readBytes(), password.toCharArray())
             }
             val anchors = server.trustedCa?.let { Certs.parse(File(AppDirs.config, it.fileName).readBytes()) }.orEmpty()
             return base.newBuilder()
