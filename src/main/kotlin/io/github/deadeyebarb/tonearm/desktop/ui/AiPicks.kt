@@ -5,16 +5,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.ThumbDown
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -40,11 +43,11 @@ import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
 import io.github.deadeyebarb.tonearm.weekly.WeeklySettings
 import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.DateFormat
-import java.util.Date
 
 /**
  * Albums the Tonearm server's AI (Ollama) suggests from what you play and like, by artists you don't have:
@@ -86,16 +89,20 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
         Text(
             when {
                 current == null -> "Asking the Tonearm server…"
-                current.running -> "Ollama is going through what you play; this takes a few minutes."
+                current.running -> "The AI is going through what you play; this can take a few minutes."
                 current.picks.isEmpty() -> "Nothing yet."
                 else -> "${current.picks.size} albums by artists you don't have, from what you play and like · " +
-                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(current.madeAt))
+                    DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(current.madeAt)) + current.model.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             },
             style = MaterialTheme.typography.bodyMedium, color = hud.dim,
         )
         current?.seed?.let { Text("More like $it", style = MaterialTheme.typography.bodyMedium, color = hud.accent2, modifier = Modifier.padding(top = 4.dp)) }
         (failed ?: current?.problem)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
-        current?.picks?.forEach { pick -> AiPickRow(app, nav, pick, canRequest = lidarr != null, youtube = config.playYouTube) }
+        current?.picks?.forEach { pick ->
+            AiPickRow(app, nav, pick, canRequest = lidarr != null, youtube = config.playYouTube) {
+                picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+            }
+        }
     }
 }
 
@@ -168,7 +175,9 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
                 Column(Modifier.weight(1f)) {
                     Text(pick.album ?: pick.artist, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(pick.artist + (pick.year?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium, color = hud.accent2, maxLines = 1)
-                    if (pick.because.isNotEmpty()) Text("Because you play " + pick.because.joinToString(" and "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1)
+                    (pick.reason ?: pick.because.takeIf { it.isNotEmpty() }?.let { "Because you play " + it.joinToString(" and ") })?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 2)
+                    }
                 }
                 HudButton("More like it", { nav.go(Screen.MoreLike(MoreLikeSeed(pick.artist, pick.artist, aiSeed = "the artist ${pick.artist}", cover = pick.imageUrl))) }, filled = false)
                 if (config.playYouTube) {
@@ -195,6 +204,7 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
                         }
                     }, icon = Icons.Rounded.CloudDownload, filled = false)
                 }
+                NotForMe(app, pick.artist) { picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist }) }
             }
         }
     }
@@ -256,7 +266,7 @@ private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
 }
 
 @Composable
-private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest: Boolean, youtube: Boolean) {
+private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest: Boolean, youtube: Boolean, onGone: () -> Unit) {
     val scope = rememberCoroutineScope()
     val hud = Hud.colors
     Row(Modifier.fillMaxWidth().widthIn(max = 900.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -285,5 +295,18 @@ private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest:
                 }
             }, icon = Icons.Rounded.CloudDownload, filled = false)
         }
+        NotForMe(app, pick.artist, onGone)
+    }
+}
+
+/** "Not for me": the Tonearm server leaves [artist] out of the picks from now on (until they're played a few times). */
+@Composable
+private fun NotForMe(app: DesktopApp, artist: String, onGone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    IconButton(onClick = {
+        onGone()
+        scope.launch { app.attempt { app.dismiss(artist); app.message("No more $artist in your picks") } }
+    }) {
+        Icon(Icons.Rounded.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp))
     }
 }

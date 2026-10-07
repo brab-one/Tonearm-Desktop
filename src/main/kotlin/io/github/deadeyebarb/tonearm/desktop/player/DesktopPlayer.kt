@@ -57,6 +57,8 @@ class DesktopPlayer(
     private val config: ConfigStore,
     /** Songs to append when the last one starts ("When the queue ends"); gets the played song keys. */
     private val onQueueEnd: suspend (last: ConnectSong, played: Set<String>) -> List<ConnectSong> = { _, _ -> emptyList() },
+    /** Every song heard, skipped ones too: when it started and how far it got (for the listening history). */
+    private val onPlayed: (song: ConnectSong, startedAt: Long, listenedMs: Long, durationMs: Long) -> Unit = { _, _, _, _ -> },
 ) : Mpv.Listener {
     private val thread = Executors.newSingleThreadExecutor { Thread(it, "player").apply { isDaemon = true } }
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -71,6 +73,12 @@ class DesktopPlayer(
     private var nowPlayingSentFor = -1
     private var scrobbledFor = -1
     private var continuedAfter = -1
+
+    /** The song being heard: when it started, from where, and the furthest it got. */
+    private class Heard(val song: ConnectSong, val startedAt: Long, val fromMs: Long) {
+        var reachedMs = fromMs
+    }
+    private var heard: Heard? = null
 
     init {
         mpv.observe("playlist-pos", Mpv.FORMAT_INT64)
@@ -187,6 +195,7 @@ class DesktopPlayer(
     }
 
     fun stop() = post {
+        report()
         mpv.command("stop")
         entries.clear()
         _state.update { it.copy(playing = false, positionMs = 0) }
@@ -252,7 +261,7 @@ class DesktopPlayer(
     fun clearError() = _state.update { it.copy(error = null) }
 
     fun shutdown() {
-        thread.submit { mpv.destroy() }.get()
+        thread.submit { report(); mpv.destroy() }.get()
         proxy.stop()
     }
 
@@ -264,6 +273,7 @@ class DesktopPlayer(
             "pause" -> _state.update { it.copy(playing = value == false && entries.isNotEmpty()) }
             "time-pos" -> (value as? Double)?.let { seconds ->
                 val ms = (seconds * 1000).toLong()
+                heard?.let { if (ms > it.reachedMs) it.reachedMs = ms }
                 // Every frame reports a position; the UI only needs a few updates a second.
                 if (kotlin.math.abs(ms - _state.value.positionMs) >= 200 || ms < _state.value.positionMs) {
                     _state.update { it.copy(positionMs = ms) }
@@ -274,6 +284,7 @@ class DesktopPlayer(
             "volume" -> (value as? Double)?.let { v -> _state.update { it.copy(volume = v.toInt()) } }
             "paused-for-cache" -> _state.update { it.copy(buffering = value == true) }
             "idle-active" -> if (value == true) {
+                report()
                 entries.clear()
                 _state.update { it.copy(playing = false, buffering = false) }
             }
@@ -314,6 +325,7 @@ class DesktopPlayer(
     private fun loadCurrent(startMs: Long) {
         val s = _state.value
         val song = s.current ?: return
+        hearing(song, startMs)
         val url = urlOf(song)
         if (startMs > 0) {
             mpv.command("loadfile", url, "replace", "-1", "start=" + String.format(Locale.ROOT, "%.3f", startMs / 1000.0))
@@ -340,10 +352,26 @@ class DesktopPlayer(
         }
         val current = entries.firstOrNull() ?: return
         if (current != _state.value.index) {
+            _state.value.queue.getOrNull(current)?.let { hearing(it, 0) }
             _state.update { it.copy(index = current, positionMs = 0, durationMs = (it.queue.getOrNull(current)?.duration ?: 0) * 1000L) }
             scrobbledFor = -1
         }
         ensureNext()
+    }
+
+    /** [song] starts being heard (from [fromMs]); the one before is done. */
+    private fun hearing(song: ConnectSong, fromMs: Long) {
+        report()
+        heard = Heard(song, System.currentTimeMillis(), fromMs)
+    }
+
+    /** Hands the song being heard to [onPlayed], once. */
+    private fun report() {
+        val h = heard ?: return
+        heard = null
+        val listened = h.reachedMs - h.fromMs
+        val duration = (h.song.duration ?: 0) * 1000L
+        if (listened >= 1_000) onPlayed(h.song, h.startedAt, listened, duration)
     }
 
     /** Keeps mpv's second entry in step with what should play next. */

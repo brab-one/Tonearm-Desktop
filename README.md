@@ -49,14 +49,17 @@ submodule).
 - **Remove from server**: an album or artist goes from Lidarr with its files, and Navidrome after its scan
 - **Wanted** tab on the Lidarr screen: what Lidarr is still looking for, each searchable again
 - **Discover** (with the Tonearm server): discovery picks (artists you don't have that yours point to, from
-  Deezer's related artists, each with an album) and AI picks (from your Ollama); open one on YouTube Music
-  or request it
+  Deezer's related artists, each with an album) and AI picks (from the server's AI: Ollama, an OpenAI-style
+  API or Claude); open one on YouTube Music or request it, or give it a thumbs-down for "not for me"
 - **YouTube Music** for what you don't have (in search), with the artist requested in Lidarr when it plays
 - **Tonearm Connect**: with the [Tonearm server](https://github.com/brab-one/Tonearm-Server) next to your
   Navidrome (or the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr), the phone's
   Devices screen shows this player and controls it (play/pause, skip, seek, volume, shuffle, repeat,
   queue), and playback moves between phone and desktop
-- Scrobbles to the music server (now playing, and at half the song or 4 minutes)
+- Scrobbles to the music server (now playing, and at half the song or 4 minutes), and every song it plays
+  (YouTube Music and skips too) goes to the Tonearm server's listening history, which the picks learn from
+- **Player bar**: click the song to go back to where you started it, the artist for their page, right-click
+  for the song's menu
 - Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
 - Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next, and the media keys while the window has focus
 - Passwords and API keys go to the desktop keyring (Secret Service: KWallet, GNOME Keyring) on Linux and

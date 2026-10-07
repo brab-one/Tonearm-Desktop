@@ -9,6 +9,8 @@ import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
 import io.github.deadeyebarb.tonearm.connect.AiPicks
+import io.github.deadeyebarb.tonearm.connect.Played
+import java.io.IOException
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
@@ -44,6 +46,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -61,15 +67,6 @@ class DesktopApp {
     val config = ConfigStore(json)
 
     init {
-        // Notice when the Tonearm server appears, goes, or the music server changes.
-        scope.launch {
-            config.state.map { it.server }.distinctUntilChanged().collectLatest {
-                while (true) {
-                    tonearmServer.refresh(sessions.current())
-                    delay(5 * 60_000L)
-                }
-            }
-        }
         USER_AGENT = "Tonearm/1.3 (Desktop)"
     }
 
@@ -104,8 +101,41 @@ class DesktopApp {
     val sources = PlaylistSources(youtubeClient, youtube)
     private val continuation = Continuation(api, youtube)
 
-    val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue)
+    val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue, ::played)
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
+
+    private val unsentPlays = ArrayList<Played>()
+    private val sendingPlays = Mutex()
+
+    /** A song the player heard, for the Tonearm server's listening history. */
+    private fun played(song: ConnectSong, startedAt: Long, listenedMs: Long, durationMs: Long) {
+        val artist = song.artist?.takeIf { it.isNotBlank() } ?: return
+        if (song.title.isBlank()) return
+        val source = when (song.source) {
+            ConnectSong.YOUTUBE -> "youtube"
+            ConnectSong.LOCAL -> "local"
+            else -> "library"
+        }
+        synchronized(unsentPlays) {
+            unsentPlays += Played(startedAt, artist, song.title, song.album, durationMs, listenedMs, source)
+            while (unsentPlays.size > 500) unsentPlays.removeAt(0)
+        }
+        scope.launch { sendPlays() }
+    }
+
+    /** Sends what was heard to the Tonearm server (when it keeps a history); what doesn't get there waits for the next song. */
+    private suspend fun sendPlays() = sendingPlays.withLock {
+        val batch = synchronized(unsentPlays) { unsentPlays.toList() }.ifEmpty { return@withLock }
+        val session = sessions.current() ?: return@withLock
+        try {
+            if (tonearmServer.refresh(session)?.history == true) connectClient.played(session, batch)
+            synchronized(unsentPlays) { unsentPlays.removeAll(batch.toSet()) }
+        } catch (_: IOException) {
+        }
+    }
+
+    /** "Not for me": the Tonearm server leaves [artist] out of the picks from now on. */
+    suspend fun dismiss(artist: String) = connectClient.dismiss(sessions.current() ?: throw NoServerException(), artist)
 
     /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones, a [seed] for ones like that. */
     suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks =
@@ -223,8 +253,23 @@ class DesktopApp {
         return next.map { if (it.youtube) it.song.toConnectSong(ConnectSong.YOUTUBE) else it.song.toConnectSong() }
     }
 
+    init {
+        // Notice when the Tonearm server appears, goes, or the music server changes. Started last: it needs
+        // everything above, and runs on another thread right away.
+        scope.launch {
+            config.state.map { it.server }.distinctUntilChanged().collectLatest {
+                while (true) {
+                    tonearmServer.refresh(sessions.current())
+                    delay(5 * 60_000L)
+                }
+            }
+        }
+    }
+
     fun shutdown() {
         connect.goodbye()
         player.shutdown()
+        // The last song too, if the server answers quickly.
+        runBlocking { withTimeoutOrNull(3_000) { sendPlays() } }
     }
 }
