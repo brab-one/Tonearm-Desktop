@@ -31,6 +31,11 @@ dependencies {
     implementation(libs.jna.platform)
     // Tags and cover art of local music files.
     implementation("net.jthink:jaudiotagger:3.0.1")
+    // The session bus on Linux: MPRIS (media keys, the desktop's media controls) and the tray icon.
+    implementation("com.github.hypfvieh:dbus-java-core:5.2.2")
+    implementation("com.github.hypfvieh:dbus-java-transport-native-unixsocket:5.2.2")
+    // dbus-java logs through SLF4J; without a binding it warns on every start.
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 
     testImplementation(kotlin("test"))
     testImplementation(libs.okhttp.mockwebserver)
@@ -76,7 +81,8 @@ compose.desktop {
             packageVersion = "1.11.0"
             description = "Lossless Subsonic player with Lidarr and Brainarr"
             vendor = "Deadeyebarb"
-            modules("java.naming", "java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.sql", "java.management", "java.logging")
+            // jdk.security.auth and jdk.net: dbus-java's login on the session bus.
+            modules("java.naming", "java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.sql", "java.management", "java.logging", "jdk.security.auth", "jdk.net")
             linux {
                 iconFile.set(project.file("src/main/resources/icon.png"))
                 menuGroup = "AudioVideo"

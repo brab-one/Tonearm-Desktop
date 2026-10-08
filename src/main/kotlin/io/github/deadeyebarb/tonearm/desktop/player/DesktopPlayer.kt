@@ -8,8 +8,11 @@ import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -65,6 +68,9 @@ class DesktopPlayer(
     private val mpv = Mpv(this)
     private val _state = MutableStateFlow(PlayerState(volume = config.state.value.volume))
     val state: StateFlow<PlayerState> = _state.asStateFlow()
+    private val _seeks = MutableSharedFlow<Long>(extraBufferCapacity = 8)
+    /** Where each seek went (ms), for MPRIS. */
+    val seeks: SharedFlow<Long> = _seeks.asSharedFlow()
 
     /** Queue indices in play order (shuffled or not). */
     private var order: List<Int> = emptyList()
@@ -132,6 +138,23 @@ class DesktopPlayer(
         _state.update { it.copy(queue = queue, index = start, shuffle = shuffle, error = null, from = from) }
         order = playOrder(queue.size, start, shuffle)
         loadCurrent(positionMs)
+    }
+
+    /**
+     * Puts a saved queue back, paused where it was. Nothing is loaded or fetched until play is pressed
+     * (the server may not even be reachable yet).
+     */
+    fun restore(saved: SavedQueue) = post {
+        if (_state.value.queue.isNotEmpty()) return@post
+        val song = saved.songs.getOrNull(saved.index) ?: return@post
+        order = playOrder(saved.songs.size, saved.index, saved.shuffle)
+        mpv.set("loop-file", if (saved.repeat == "one") "inf" else "no")
+        _state.update {
+            it.copy(
+                queue = saved.songs, index = saved.index, positionMs = saved.positionMs, durationMs = (song.duration ?: 0) * 1000L,
+                shuffle = saved.shuffle, repeat = saved.repeat, from = null,
+            )
+        }
     }
 
     fun togglePlay() = post {
@@ -424,9 +447,10 @@ class DesktopPlayer(
     }
 
     private fun seekNow(positionMs: Long) {
-        if (entries.isEmpty()) return loadCurrent(positionMs)
-        mpv.command("seek", String.format(Locale.ROOT, "%.3f", positionMs / 1000.0), "absolute")
+        // Nothing loaded (a restored queue, or stopped): play starts there.
+        if (entries.isNotEmpty()) mpv.command("seek", String.format(Locale.ROOT, "%.3f", positionMs / 1000.0), "absolute")
         _state.update { it.copy(positionMs = positionMs) }
+        _seeks.tryEmit(positionMs)
     }
 
     private fun shiftIndices(from: Int, by: Int) {

@@ -32,6 +32,10 @@ data class DesktopConfig(
     /** Folders on this computer whose music shows up under "This computer". */
     val localFolders: List<String> = emptyList(),
     val audio: AudioSettings = AudioSettings(),
+    /** Closing the window leaves Tonearm playing in the tray (when there is one). */
+    val closeToTray: Boolean = true,
+    /** Where the window was, to open there again. */
+    val window: SavedWindow? = null,
 ) {
     companion object {
         fun defaultDeviceName(): String {
@@ -81,3 +85,20 @@ data class AudioSettings(
     val gains: List<Double> = List(10) { 0.0 },
     val preampDb: Double = 0.0,
 )
+
+/** The window's place and size (in the screen's units); no [x]/[y] means centered. */
+@Serializable
+data class SavedWindow(
+    val x: Int? = null,
+    val y: Int? = null,
+    val width: Int = DEFAULT_WIDTH,
+    val height: Int = DEFAULT_HEIGHT,
+    val maximized: Boolean = false,
+) {
+    companion object {
+        const val DEFAULT_WIDTH = 1360
+        const val DEFAULT_HEIGHT = 860
+        const val MIN_WIDTH = 1000
+        const val MIN_HEIGHT = 640
+    }
+}

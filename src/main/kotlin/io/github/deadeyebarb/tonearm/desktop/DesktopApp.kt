@@ -16,6 +16,7 @@ import java.io.IOException
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import java.io.File
@@ -35,6 +36,8 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
+import io.github.deadeyebarb.tonearm.desktop.player.QueueStore
+import io.github.deadeyebarb.tonearm.desktop.player.SavedQueue
 import io.github.deadeyebarb.tonearm.desktop.player.StreamProxy
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
@@ -107,6 +110,28 @@ class DesktopApp {
     private val removal = MusicRemoval(LidarrClient(integrationHttp, json))
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue, ::played)
+    private val queueStore = QueueStore(Json(json) { prettyPrint = false })
+
+    init {
+        // Last time's queue, paused where it was.
+        queueStore.load()?.takeIf { it.playsWith(config.state.value.server?.id) }?.let(player::restore)
+        // Saved a second after the queue changes or playback stops, every 10 s while it plays, and at exit.
+        scope.launch(Dispatchers.IO) {
+            player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing) }.distinctUntilChanged().drop(1).collectLatest {
+                delay(1_000)
+                saveQueue()
+                while (player.state.value.playing) {
+                    delay(10_000)
+                    saveQueue()
+                }
+            }
+        }
+    }
+
+    private fun saveQueue() {
+        runCatching { queueStore.save(SavedQueue.of(player.state.value, config.state.value.server?.id)) }
+    }
+
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
 
     private val unsentPlays = ArrayList<Played>()
@@ -319,6 +344,7 @@ class DesktopApp {
 
     fun shutdown() {
         connect.goodbye()
+        saveQueue()
         player.shutdown()
         // The last song too, if the server answers quickly.
         runBlocking { withTimeoutOrNull(3_000) { sendPlays() } }

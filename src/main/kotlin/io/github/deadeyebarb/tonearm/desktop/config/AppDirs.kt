@@ -5,6 +5,7 @@ import java.io.File
 /** Where the app keeps its files, per platform conventions. */
 object AppDirs {
     val isWindows: Boolean = System.getProperty("os.name").orEmpty().startsWith("Windows")
+    val isLinux: Boolean = System.getProperty("os.name").orEmpty().startsWith("Linux")
     private val home = System.getProperty("user.home")
 
     val config: File = if (isWindows) {

@@ -100,6 +100,9 @@ fun SettingsScreen(app: DesktopApp) {
             Toggle("YouTube Music artists and albums", "Search and artist pages also show artists and albums from YouTube Music: bios, popular songs and albums you don't have.", config.youtubeCatalog) { v ->
                 app.config.update { it.copy(youtubeCatalog = v) }
             }
+            Toggle("Close to tray", "Closing the window leaves the music playing, with an icon in the tray to open it again or quit. Without a tray, or off, closing quits.", config.closeToTray) { v ->
+                app.config.update { it.copy(closeToTray = v) }
+            }
             Text("When the queue ends", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
                 for ((value, label) in listOf("stop" to "Stop", "similar" to "Similar music", "playlist" to "Another playlist")) {

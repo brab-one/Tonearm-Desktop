@@ -64,7 +64,13 @@ submodule).
 - **Player bar**: click the song to go back to where you started it, the artist for their page, right-click
   for the song's menu
 - Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
-- Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next, and the media keys while the window has focus
+- Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next
+- **Media keys anywhere**: MPRIS on Linux, so the desktop's media keys and media controls (Plasma's widget,
+  GNOME's, KDE Connect, `playerctl`) see and control the player; global hotkeys on Windows
+- **Close to tray**: closing the window leaves the music playing, with a tray icon to show or hide the window,
+  play/pause, skip or quit (middle click plays/pauses). Settings → Close to tray turns it off; without a tray,
+  closing quits
+- The queue (where it was, shuffle and repeat) comes back paused after a restart, and the window where it was
 - Passwords and API keys go to the desktop keyring (Secret Service: KWallet, GNOME Keyring) on Linux and
   are DPAPI-encrypted on Windows. Settings: `~/.config/tonearm` / `%APPDATA%\Tonearm`
 
@@ -113,5 +119,4 @@ packaging/build-windows.sh             # portable Windows zip (on Linux)
 
 ## Known limitations
 
-- No MPRIS/system media integration yet: media keys only work while the window has focus.
 - The Windows build is tested by CI and under Wine, not on real Windows hardware.
