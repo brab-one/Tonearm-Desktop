@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.desktop.config
 import com.sun.jna.platform.win32.Crypt32Util
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Keeps passwords and API keys out of the config file: in the desktop keyring through the Secret
@@ -68,17 +69,27 @@ object SecretStore {
     /** A few tries: right after login, or while the keyring is being updated, it may not answer yet. */
     private fun lookup(name: String): String? {
         repeat(3) { attempt ->
-            runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }.getOrNull()?.let { return it }
+            val result = runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }
+            result.getOrNull()?.let { return it }
+            // One that didn't answer at all (an unlock prompt nobody answers) isn't asked again right away.
+            if (result.exceptionOrNull() is TimeoutException) return null
             if (attempt < 2) Thread.sleep(400)
         }
         return null
     }
 
+    /** Runs [command] and returns what it printed, giving up after 30 s (a keyring that never answers). */
     private fun run(vararg command: String): String {
         val process = ProcessBuilder(*command).start()
-        val out = process.inputStream.readBytes().decodeToString()
-        check(process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0) { "${command[0]} failed" }
-        return out
+        process.outputStream.close()
+        // Waited for before reading: reading first would block for as long as the keyring does. What
+        // secret-tool prints fits in the pipe, so it can't stall on a full one.
+        if (!process.waitFor(30, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            throw TimeoutException("${command[0]} didn't answer")
+        }
+        check(process.exitValue() == 0) { "${command[0]} failed" }
+        return process.inputStream.readBytes().decodeToString()
     }
 
     private fun b64(bytes: ByteArray) = Base64.getEncoder().encodeToString(bytes)

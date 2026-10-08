@@ -21,6 +21,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class PlayerState(
     val queue: List<ConnectSong> = emptyList(),
@@ -73,12 +75,17 @@ class DesktopPlayer(
     val seeks: SharedFlow<Long> = _seeks.asSharedFlow()
 
     /** Queue indices in play order (shuffled or not). */
-    private var order: List<Int> = emptyList()
+    @Volatile private var order: List<Int> = emptyList()
     /** Queue indices of the entries in mpv's playlist: the current song and, when known, the next. */
     private val entries = ArrayList<Int>()
     private var nowPlayingSentFor = -1
-    private var scrobbledFor = -1
+    @Volatile private var scrobbledFor = -1
     private var continuedAfter = -1
+    /** A seek or a song load of ours is under way: mpv's playback restart for it isn't news. */
+    private var ownSeek = false
+    /** mpv is gone (set on the player thread): what's still queued for the player is dropped. */
+    @Volatile private var closed = false
+    private val shuttingDown = AtomicBoolean(false)
 
     /** The song being heard: when it started, from where, and the furthest it got. */
     private class Heard(val song: ConnectSong, val startedAt: Long, val fromMs: Long) {
@@ -147,7 +154,9 @@ class DesktopPlayer(
     fun restore(saved: SavedQueue) = post {
         if (_state.value.queue.isNotEmpty()) return@post
         val song = saved.songs.getOrNull(saved.index) ?: return@post
-        order = playOrder(saved.songs.size, saved.index, saved.shuffle)
+        // The saved play order when it fits the queue (a shuffled one goes on as it was), else a new one.
+        order = saved.order.takeIf { it.sorted() == saved.songs.indices.toList() } ?: playOrder(saved.songs.size, saved.index, saved.shuffle)
+        scrobbledFor = if (saved.scrobbled) saved.index else -1
         mpv.set("loop-file", if (saved.repeat == "one") "inf" else "no")
         _state.update {
             it.copy(
@@ -183,8 +192,9 @@ class DesktopPlayer(
 
     fun previous() = post {
         val s = _state.value
-        if (s.positionMs > RESTART_THRESHOLD_MS) return@post seekNow(0)
-        val previous = previousIndex(s.index) ?: return@post seekNow(0)
+        val previous = if (s.positionMs > RESTART_THRESHOLD_MS) null else previousIndex(s.index)
+        // From the start of this song; when nothing's loaded (stopped, the queue ended, or just restored), that plays it.
+        if (previous == null) return@post if (entries.isEmpty()) loadCurrent(0) else seekNow(0)
         _state.update { it.copy(index = previous) }
         loadCurrent(0)
     }
@@ -197,6 +207,9 @@ class DesktopPlayer(
     }
 
     fun seek(positionMs: Long) = post { seekNow(positionMs) }
+
+    /** The queue as [QueueStore] keeps it, with its play order and whether the current song was scrobbled. */
+    fun saved(server: String?): SavedQueue = _state.value.let { s -> SavedQueue.of(s, server, order, scrobbledFor == s.index && s.index >= 0) }
 
     fun setVolume(volume: Int) = post {
         val v = volume.coerceIn(0, 100)
@@ -287,8 +300,15 @@ class DesktopPlayer(
 
     fun clearError() = _state.update { it.copy(error = null) }
 
+    /** Stops for good, once: commands that still come in (MPRIS, the tray, Connect) are dropped from here on. */
     fun shutdown() {
-        thread.submit { report(); mpv.destroy() }.get()
+        if (!shuttingDown.compareAndSet(false, true)) return
+        thread.submit {
+            report()
+            closed = true
+            mpv.destroy()
+        }.get()
+        thread.shutdown()
         proxy.stop()
     }
 
@@ -336,6 +356,17 @@ class DesktopPlayer(
         maybeContinue()
     }
 
+    override fun onPlaybackRestart() = post {
+        if (ownSeek) {
+            ownSeek = false
+            return@post
+        }
+        // mpv went back by itself: repeat-one looping the song, or the queue wrapping round to it.
+        val ms = mpv.get("time-pos")?.toDoubleOrNull()?.let { (it * 1000).toLong() } ?: return@post
+        _state.update { it.copy(positionMs = ms) }
+        _seeks.tryEmit(ms)
+    }
+
     override fun onEndFile(reason: Int, error: String?) = post {
         if (reason == Mpv.END_ERROR) {
             val title = _state.value.current?.title ?: "this song"
@@ -346,7 +377,12 @@ class DesktopPlayer(
     // --- Internals (player thread) -------------------------------------------------------------
 
     private fun post(block: () -> Unit) {
-        thread.execute(block)
+        if (closed) return
+        try {
+            // Checked again when it runs: it may have been queued behind the shutdown.
+            thread.execute { if (!closed) block() }
+        } catch (_: RejectedExecutionException) {
+        }
     }
 
     private fun loadCurrent(startMs: Long) {
@@ -354,6 +390,7 @@ class DesktopPlayer(
         val song = s.current ?: return
         hearing(song, startMs)
         val url = urlOf(song)
+        ownSeek = true
         if (startMs > 0) {
             mpv.command("loadfile", url, "replace", "-1", "start=" + String.format(Locale.ROOT, "%.3f", startMs / 1000.0))
         } else {
@@ -448,7 +485,7 @@ class DesktopPlayer(
 
     private fun seekNow(positionMs: Long) {
         // Nothing loaded (a restored queue, or stopped): play starts there.
-        if (entries.isNotEmpty()) mpv.command("seek", String.format(Locale.ROOT, "%.3f", positionMs / 1000.0), "absolute")
+        if (entries.isNotEmpty()) ownSeek = mpv.command("seek", String.format(Locale.ROOT, "%.3f", positionMs / 1000.0), "absolute")
         _state.update { it.copy(positionMs = positionMs) }
         _seeks.tryEmit(positionMs)
     }

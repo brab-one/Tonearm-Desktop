@@ -5,6 +5,7 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The part of libmpv's C API (client.h) the player uses. */
 @Suppress("FunctionName")
@@ -41,11 +42,15 @@ class Mpv(private val listener: Listener) {
         /** [reason]: [END_EOF], [END_STOP], [END_ERROR]… */
         fun onEndFile(reason: Int, error: String?)
         fun onFileLoaded()
+        /** Playback (re)started at a new spot: after a load, a seek, or mpv looping or going back by itself. */
+        fun onPlaybackRestart()
     }
 
     private val lib: MpvLib = load()
     private val ctx: Pointer = lib.mpv_create() ?: throw MpvMissingException("libmpv couldn't start")
     @Volatile private var running = true
+    /** After [destroy] the handle is gone: commands do nothing, properties read as null. */
+    private val destroyed = AtomicBoolean(false)
     private val observed = mutableListOf<String>()
 
     init {
@@ -75,12 +80,13 @@ class Mpv(private val listener: Listener) {
     }
 
     /** Runs an mpv command (e.g. `loadfile <url> append`); returns false if mpv rejected it. */
-    fun command(vararg args: String): Boolean = lib.mpv_command(ctx, arrayOf(*args, null)) >= 0
+    fun command(vararg args: String): Boolean = !destroyed.get() && lib.mpv_command(ctx, arrayOf(*args, null)) >= 0
 
-    fun set(name: String, value: String): Boolean = lib.mpv_set_property_string(ctx, name, value) >= 0
+    fun set(name: String, value: String): Boolean = !destroyed.get() && lib.mpv_set_property_string(ctx, name, value) >= 0
 
     /** A property as text (node properties like `audio-device-list` come back as JSON). */
     fun get(name: String): String? {
+        if (destroyed.get()) return null
         val pointer = lib.mpv_get_property_string(ctx, name) ?: return null
         return try {
             pointer.getString(0, "UTF-8")
@@ -89,7 +95,9 @@ class Mpv(private val listener: Listener) {
         }
     }
 
+    /** Frees the handle, once. */
     fun destroy() {
+        if (!destroyed.compareAndSet(false, true)) return
         running = false
         lib.mpv_wakeup(ctx)
         lib.mpv_terminate_destroy(ctx)
@@ -102,6 +110,7 @@ class Mpv(private val listener: Listener) {
                 EVENT_SHUTDOWN -> return
                 EVENT_START_FILE -> listener.onStartFile()
                 EVENT_FILE_LOADED -> listener.onFileLoaded()
+                EVENT_PLAYBACK_RESTART -> listener.onPlaybackRestart()
                 EVENT_END_FILE -> {
                     val data = event.getPointer(16)
                     val reason = data?.getInt(0) ?: END_EOF
@@ -134,6 +143,7 @@ class Mpv(private val listener: Listener) {
         private const val EVENT_START_FILE = 6
         private const val EVENT_END_FILE = 7
         private const val EVENT_FILE_LOADED = 8
+        private const val EVENT_PLAYBACK_RESTART = 21
         private const val EVENT_PROPERTY_CHANGE = 22
         const val END_EOF = 0
         const val END_STOP = 2

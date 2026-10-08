@@ -208,12 +208,14 @@ class Mpris private constructor(
         val cover = song.coverArt ?: return null
         if (song.source == ConnectSong.LOCAL) return File(cover).toPath().toUri().toString()
         if (song.source == ConnectSong.YOUTUBE || cover.startsWith("https://")) return cover
-        val session = app.sessions.current() ?: return null
-        val file = File(coverDir, (session.id + "-" + cover).replace(Regex("[^A-Za-z0-9._-]"), "_"))
+        // Under the lock: no keyring or network here, the session (its password) is only opened for the download.
+        val serverId = app.config.state.value.server?.id ?: return null
+        val file = File(coverDir, (serverId + "-" + cover).replace(Regex("[^A-Za-z0-9._-]"), "_"))
         if (file.exists()) return file.toPath().toUri().toString()
         if (fetching.add(file.name)) {
             app.scope.launch(Dispatchers.IO) {
                 try {
+                    val session = app.sessions.current() ?: return@launch
                     val request = Request.Builder().url(session.coverUrl(cover, 512)).build()
                     session.client.forImages().newCall(request).execute().use { response ->
                         if (!response.isSuccessful) return@use
@@ -257,13 +259,12 @@ class Mpris private constructor(
         }.getOrNull()
 
         /** The song's id for MPRIS: an object path, with everything but letters and digits escaped. */
-        fun trackId(song: ConnectSong): DBusPath {
-            val id = song.id.toByteArray().joinToString("") { b ->
-                val c = b.toInt().toChar()
-                if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') c.toString() else "_%02x".format(b.toInt() and 0xff)
-            }
-            return DBusPath("/io/github/deadeyebarb/tonearm/track/${song.source}/" + id.ifEmpty { "_" })
-        }
+        fun trackId(song: ConnectSong): DBusPath = DBusPath("/io/github/deadeyebarb/tonearm/track/${pathElement(song.source)}/${pathElement(song.id)}")
+
+        private fun pathElement(text: String) = text.toByteArray().joinToString("") { b ->
+            val c = b.toInt().toChar()
+            if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') c.toString() else "_%02x".format(b.toInt() and 0xff)
+        }.ifEmpty { "_" }
 
         /** MPRIS metadata of [song] ([durationMs] from the player when it knows), or the "no track" one. */
         fun metadata(song: ConnectSong?, durationMs: Long, artUrl: String?): Map<String, Variant<*>> {
@@ -271,11 +272,11 @@ class Mpris private constructor(
             val lengthMs = durationMs.takeIf { it > 0 } ?: ((song.duration ?: 0) * 1000L)
             return buildMap {
                 put("mpris:trackid", Variant(trackId(song)))
-                put("xesam:title", Variant(song.title))
-                song.artist?.takeIf { it.isNotBlank() }?.let { put("xesam:artist", Variant(listOf(it), "as")) }
-                song.album?.takeIf { it.isNotBlank() }?.let { put("xesam:album", Variant(it)) }
+                put("xesam:title", Variant(song.title.busSafe()))
+                song.artist?.busSafe()?.takeIf { it.isNotEmpty() }?.let { put("xesam:artist", Variant(listOf(it), "as")) }
+                song.album?.busSafe()?.takeIf { it.isNotEmpty() }?.let { put("xesam:album", Variant(it)) }
                 if (lengthMs > 0) put("mpris:length", Variant(lengthMs * 1000))
-                artUrl?.let { put("mpris:artUrl", Variant(it)) }
+                artUrl?.let { put("mpris:artUrl", Variant(it.busSafe())) }
             }
         }
     }

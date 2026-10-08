@@ -3,6 +3,8 @@ package io.github.deadeyebarb.tonearm.desktop.system
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -19,6 +21,8 @@ import org.freedesktop.dbus.errors.PropertyReadOnly
 import org.freedesktop.dbus.interfaces.DBus
 import org.freedesktop.dbus.interfaces.DBusInterface
 import org.freedesktop.dbus.interfaces.Properties
+import org.freedesktop.dbus.matchrules.DBusMatchRuleBuilder
+import org.freedesktop.dbus.messages.Error
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.Variant
 import java.awt.RenderingHints
@@ -107,13 +111,25 @@ interface DBusMenu : DBusInterface {
 class StatusNotifier private constructor(
     private val bus: DBusConnection,
     private val player: DesktopPlayer,
+    private val scope: CoroutineScope,
+    /** The watcher's bus name, which is also its interface's name. */
+    private val watcher: String,
+    /** Our own bus name, the one the watcher knows the icon by. */
+    private val name: String,
     private val icon: List<Pixmap>,
     /** Whether the window is on screen (for the menu's Show/Hide). */
     private val windowShown: () -> Boolean,
     private val toggleWindow: () -> Unit,
     private val quit: () -> Unit,
+    /** The tray went away for good (not just restarting) and nothing shows the icon anymore. */
+    private val trayGone: () -> Unit,
 ) : StatusNotifierItem, Properties {
     private var revision = 1
+    /** A host (the panel's tray) shows the watcher's icons. A watcher can run without one: then there's no tray. */
+    @Volatile private var hostPresent = false
+
+    /** Whether the icon is in a tray, so the window can hide to it. */
+    val trayShown: Boolean get() = hostPresent && bus.isConnected
 
     override fun getObjectPath() = ITEM_PATH
 
@@ -149,7 +165,35 @@ class StatusNotifier private constructor(
 
     private fun toolTip(s: PlayerState): ToolTip {
         val song = s.current ?: return ToolTip("", emptyList(), "Tonearm", "")
-        return ToolTip("", emptyList(), song.title, listOfNotNull(song.artist, "paused".takeIf { !s.playing }).joinToString(" · "))
+        return ToolTip("", emptyList(), song.title.busSafe(), listOfNotNull(song.artist?.busSafe(), "paused".takeIf { !s.playing }).joinToString(" · "))
+    }
+
+    /** Puts the icon in the watcher's list and finds out whether a tray shows it. It waits for answers: not on the UI thread. */
+    private fun register() {
+        val reply = bus.call(watcher, WATCHER_PATH, watcher, "RegisterStatusNotifierItem", "s", name)
+        // No answer isn't a no: the watcher may just be slow, and its host is asked next.
+        if (reply is Error) hostChanged(false) else readHost()
+    }
+
+    /** Asks the watcher whether a host is registered; one without that property is taken to have one. */
+    private fun readHost() {
+        val present = runCatching {
+            val value: Any? = bus.getRemoteObject(watcher, WATCHER_PATH, Properties::class.java).Get(watcher, "IsStatusNotifierHostRegistered")
+            ((value as? Variant<*>)?.value ?: value) != false
+        }.getOrDefault(true)
+        hostChanged(present)
+    }
+
+    private fun hostChanged(present: Boolean) {
+        val was = hostPresent
+        hostPresent = present
+        if (was && !present) {
+            scope.launch {
+                // A tray that restarts (plasmashell) is back within moments.
+                delay(3_000)
+                if (!hostPresent) trayGone()
+            }
+        }
     }
 
     /** The menu has changed (the window was shown or hidden, playback started or stopped): hosts fetch it again. */
@@ -238,6 +282,7 @@ class StatusNotifier private constructor(
     companion object {
         private const val ITEM_PATH = "/StatusNotifierItem"
         private const val MENU_PATH = "/MenuBar"
+        private const val WATCHER_PATH = "/StatusNotifierWatcher"
         private const val ITEM = "org.kde.StatusNotifierItem"
         private const val MENU = "com.canonical.dbusmenu"
         private val WATCHERS = listOf("org.kde.StatusNotifierWatcher", "org.freedesktop.StatusNotifierWatcher")
@@ -250,8 +295,8 @@ class StatusNotifier private constructor(
         private const val QUIT = 6
 
         /**
-         * Shows the tray icon when the desktop has a StatusNotifier watcher; null without one (or if it
-         * didn't take the icon). The callbacks come on D-Bus's threads.
+         * Puts the icon up when the desktop has a StatusNotifier watcher; null without one. Whether a tray
+         * actually shows it is found out in the background ([trayShown]). The callbacks come on D-Bus's threads.
          */
         fun start(
             bus: DBusConnection,
@@ -261,19 +306,27 @@ class StatusNotifier private constructor(
             windowShown: () -> Boolean,
             toggleWindow: () -> Unit,
             quit: () -> Unit,
+            trayGone: () -> Unit,
         ): StatusNotifier? = runCatching {
             val watcher = WATCHERS.firstOrNull(bus::hasOwner) ?: return null
-            val item = StatusNotifier(bus, player, pixmaps(iconPng), windowShown, toggleWindow, quit)
+            val name = "org.kde.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
+            val item = StatusNotifier(bus, player, scope, watcher, name, pixmaps(iconPng), windowShown, toggleWindow, quit, trayGone)
             bus.exportObject(ITEM_PATH, item)
             bus.exportObject(MENU_PATH, item.menu)
-            val name = "org.kde.StatusNotifierItem-${ProcessHandle.current().pid()}-1"
             bus.requestBusName(name)
-            val register = { bus.call(watcher, "/StatusNotifierWatcher", watcher, "RegisterStatusNotifierItem", "s", name) }
-            if (!register()) return null
             // A tray that restarts (Plasma does) forgets its icons: register again when its watcher is back.
             bus.addSigHandler(DBus.NameOwnerChanged::class.java) { signal ->
-                if (signal.name == watcher && signal.newOwner.isNotEmpty()) register()
+                if (signal.name != watcher) return@addSigHandler
+                if (signal.newOwner.isEmpty()) item.hostChanged(false) else scope.launch(Dispatchers.IO) { item.register() }
             }
+            // Trays (hosts) come and go while the watcher stays, e.g. the panel's tray removed or plasmashell restarting.
+            val hosts = DBusMatchRuleBuilder.create().withType("signal").withInterface(watcher).withPath(WATCHER_PATH).build()
+            bus.addGenericSigHandler(hosts) { signal ->
+                if (signal.name == "StatusNotifierHostRegistered" || signal.name == "StatusNotifierHostUnregistered") {
+                    scope.launch(Dispatchers.IO) { item.readHost() }
+                }
+            }
+            scope.launch(Dispatchers.IO) { item.register() }
             scope.launch {
                 player.state.map { Triple(it.current?.title, it.current?.artist, it.playing) }.distinctUntilChanged().collect {
                     bus.signal(ITEM_PATH, ITEM, "NewToolTip", null)

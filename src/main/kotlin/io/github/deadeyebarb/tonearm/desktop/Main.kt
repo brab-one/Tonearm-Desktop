@@ -65,19 +65,24 @@ fun main() {
         JOptionPane.showMessageDialog(null, "Tonearm needs libmpv to play music.\n\n${e.message}", "Tonearm", JOptionPane.ERROR_MESSAGE)
         exitProcess(1)
     }
+    // Logging out or shutting down ends the JVM without a quit: the queue, the song being heard and the
+    // phone's goodbye still get done (once, whichever comes first).
+    Runtime.getRuntime().addShutdownHook(Thread({ app.shutdown() }, "tonearm-shutdown"))
     val iconPng = requireNotNull(DesktopApp::class.java.getResourceAsStream("/icon.png")).readBytes()
     val icon = BitmapPainter(Image.makeFromEncoded(iconPng).toComposeImageBitmap())
     val main = MainWindow(app)
 
+    // A window hidden to a tray that's gone (or a bus that dropped us) comes back.
+    val trayGone = { onUi { if (!main.shown) main.show() } }
     // Linux: MPRIS for the media keys and the desktop's media controls, and the tray icon over D-Bus when
     // the desktop has a StatusNotifier host. Windows: the media keys as global hotkeys.
-    val bus = if (AppDirs.isLinux) SessionBus.open() else null
+    val bus = if (AppDirs.isLinux) SessionBus.open(onLost = trayGone) else null
     if (bus != null) Mpris.start(bus, app, raise = { onUi(main::show) }, quit = { onUi(main::quit) })
     val statusNotifier = bus?.let {
-        StatusNotifier.start(it, app.player, app.scope, iconPng, main::onScreen, toggleWindow = { onUi(main::toggle) }, quit = { onUi(main::quit) })
+        StatusNotifier.start(it, app.player, app.scope, iconPng, main::onScreen, toggleWindow = { onUi(main::toggle) }, quit = { onUi(main::quit) }, trayGone = trayGone)
     }
     if (AppDirs.isWindows) MediaKeys.startWindowsHotkeys(app.player)
-    // Elsewhere (Windows, macOS, Linux without a StatusNotifier host) the tray is AWT's, when there is one.
+    // Elsewhere (Windows, macOS, Linux without a StatusNotifier watcher) the tray is AWT's, when there is one.
     val awtTray = statusNotifier == null && isTraySupported
 
     application {
@@ -132,7 +137,7 @@ fun main() {
         Window(
             onCloseRequest = {
                 // With a tray icon to come back from, closing the window leaves the music playing.
-                if (app.config.state.value.closeToTray && (statusNotifier != null || awtTray)) main.hide() else main.quit()
+                if (app.config.state.value.closeToTray && (statusNotifier?.trayShown == true || awtTray)) main.hide() else main.quit()
             },
             visible = main.shown,
             title = "Tonearm",

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.merge
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import java.io.File
@@ -37,7 +38,6 @@ import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
 import io.github.deadeyebarb.tonearm.desktop.player.QueueStore
-import io.github.deadeyebarb.tonearm.desktop.player.SavedQueue
 import io.github.deadeyebarb.tonearm.desktop.player.StreamProxy
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
@@ -57,7 +57,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The desktop app's singletons. Creating it starts playback infrastructure and Tonearm Connect. */
 class DesktopApp {
@@ -114,22 +116,25 @@ class DesktopApp {
 
     init {
         // Last time's queue, paused where it was.
-        queueStore.load()?.takeIf { it.playsWith(config.state.value.server?.id) }?.let(player::restore)
-        // Saved a second after the queue changes or playback stops, every 10 s while it plays, and at exit.
+        queueStore.load()?.takeIf { it.playsWith(queueServer()) }?.let(player::restore)
+        // Saved a second after the queue changes, playback stops or a seek, every 30 s while it plays, and at exit.
         scope.launch(Dispatchers.IO) {
-            player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing) }.distinctUntilChanged().drop(1).collectLatest {
+            merge(player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing) }.distinctUntilChanged().drop(1), player.seeks).collectLatest {
                 delay(1_000)
                 saveQueue()
                 while (player.state.value.playing) {
-                    delay(10_000)
+                    delay(30_000)
                     saveQueue()
                 }
             }
         }
     }
 
+    /** Which music server a saved queue's songs are from: its address and user, which a config entry can change. */
+    private fun queueServer() = config.state.value.server?.let { it.baseUrl.trimEnd('/') + "|" + it.username }
+
     private fun saveQueue() {
-        runCatching { queueStore.save(SavedQueue.of(player.state.value, config.state.value.server?.id)) }
+        runCatching { queueStore.save(player.saved(queueServer())) }
     }
 
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
@@ -342,11 +347,30 @@ class DesktopApp {
         }
     }
 
+    private val shuttingDown = AtomicBoolean(false)
+    private val shutDown = CountDownLatch(1)
+
+    /**
+     * Saves the queue, stops the player and says goodbye, once, in about 3 s: quitting calls it, and so does
+     * the JVM when the session ends (logout, shutdown). A second call waits for the first one.
+     */
     fun shutdown() {
-        connect.goodbye()
-        saveQueue()
-        player.shutdown()
-        // The last song too, if the server answers quickly.
-        runBlocking { withTimeoutOrNull(3_000) { sendPlays() } }
+        if (!shuttingDown.compareAndSet(false, true)) {
+            shutDown.await(4, TimeUnit.SECONDS)
+            return
+        }
+        try {
+            saveQueue()
+            player.shutdown()
+            // The phone's goodbye and the last song heard, side by side.
+            runBlocking {
+                withTimeoutOrNull(3_000) {
+                    launch(Dispatchers.IO) { connect.goodbye() }
+                    sendPlays()
+                }
+            }
+        } finally {
+            shutDown.countDown()
+        }
     }
 }
