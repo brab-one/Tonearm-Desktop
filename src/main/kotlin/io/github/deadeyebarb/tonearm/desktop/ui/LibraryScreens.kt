@@ -137,7 +137,7 @@ private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album
     add(MenuEntry("More like this") { nav.go(Screen.MoreLike(albumLike(album))) })
     album.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
     if (app.canRemoveMusic && album.artistLabel.isNotEmpty()) {
-        add(MenuEntry("Remove from server…") { app.removeFromServer(ui, album.artistLabel, album.name) { if (nav.current == Screen.Album(album.id)) nav.back() } })
+        add(MenuEntry("Remove from server…") { app.removeFromServer(ui, album.artistLabel, album.name, album.year, { it.albumId == album.id }) { if (nav.current == Screen.Album(album.id)) nav.back() } })
     }
 }
 
@@ -186,7 +186,7 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                 nav.go(Screen.MoreLike(MoreLikeSeed(artist.name, artist.name, artistId = artist.id, aiSeed = seed, cover = artist.coverArt)))
                             }, icon = Icons.Rounded.AutoAwesome, filled = false)
                             if (app.canRemoveMusic) {
-                                HudButton("Remove from server…", { app.removeFromServer(ui, artist.name, null) { nav.back() } }, icon = Icons.Rounded.Delete, filled = false)
+                                HudButton("Remove from server…", { app.removeFromServer(ui, artist.name, null, null, { it.artistId == artist.id }) { if (nav.current == Screen.Artist(artist.id)) nav.back() } }, icon = Icons.Rounded.Delete, filled = false)
                             }
                         }
                     }
@@ -407,15 +407,20 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
         LoadContent(library) { result ->
             val have = result.song.map { Names.key(it.artist.orEmpty(), it.title) }.toSet()
             val yt = ((youtube.state as? Load.Ready)?.value).orEmpty().filter { Names.key(it.artist.orEmpty(), it.title) !in have }
-            val songs = remember(result) { result.song.map { it.toConnectSong() } }
-            val ytQueue = remember(yt) { yt.map { it.toConnectSong(ConnectSong.YOUTUBE) } }
+            // Disliked songs (and songs by artists said no to) go last, and never into the best matches.
+            val disliked by app.dislikes.state.collectAsState()
+            val songs = remember(result, disliked) { app.dislikes.demote(result.song.map { it.toConnectSong() }, { it.artist }, { it.title }) }
+            val ytQueue = remember(yt, disliked) { app.dislikes.demote(yt.map { it.toConnectSong(ConnectSong.YOUTUBE) }, { it.artist }, { it.title }) }
             val (ytArtists, ytAlbums) = (catalog.state as? Load.Ready)?.value ?: (emptyList<YtArtist>() to emptyList())
             if (result.artist.isEmpty() && result.album.isEmpty() && songs.isEmpty() && ytQueue.isEmpty() && localHits.isEmpty() && ytArtists.isEmpty() && youtube.state !is Load.Loading) {
                 EmptyState(Icons.Rounded.SearchOff, "Nothing found for “$q”", "Request it from the Lidarr page.")
                 return@LoadContent
             }
             val webSongs = ((web.state as? Load.Ready)?.value)?.songs.orEmpty()
-            val best = remember(result, yt, webSongs) { bestMatches(q, songs, ytQueue, webSongs) }
+            val best = remember(result, yt, webSongs, disliked) {
+                fun ok(artist: String?, title: String) = !app.dislikes.isDisliked(artist, title)
+                bestMatches(q, songs.filter { ok(it.artist, it.title) }, ytQueue.filter { ok(it.artist, it.title) }, webSongs.filter { ok(it.artist, it.title) })
+            }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
                 if (best.isNotEmpty()) {
                     item { SectionHeader("Best matches") }

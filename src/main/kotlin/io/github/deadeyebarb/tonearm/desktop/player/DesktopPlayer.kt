@@ -230,6 +230,10 @@ class DesktopPlayer(
         ensureNext()
     }
 
+    /** Takes every song [match] picks out of the queue; when the one playing goes, the next one plays. */
+    fun removeWhere(match: (ConnectSong) -> Boolean) =
+        state.value.queue.withIndex().filter { match(it.value) }.map { it.index }.sortedDescending().forEach(::remove)
+
     fun remove(index: Int) = post {
         val s = _state.value
         if (index !in s.queue.indices) return@post

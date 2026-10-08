@@ -9,14 +9,14 @@ import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttpException
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
+import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
 import io.github.deadeyebarb.tonearm.integrations.Names
-import io.github.deadeyebarb.tonearm.integrations.SongMatch
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import java.io.IOException
 
 class LidarrNotConfiguredException : IOException("Connect Lidarr in Settings first")
 
@@ -79,20 +79,13 @@ class DesktopLidarr(
     }
 
     /**
-     * Removes an artist, or one of their albums ([album] null: the artist), from Lidarr together with the files.
-     * Returns false when Lidarr doesn't have it (music it doesn't manage has to be removed on the server).
+     * Removes an artist, or one of their albums ([album] null: the artist; [year] tells same-titled albums apart), from
+     * Lidarr together with the files. Returns false when Lidarr doesn't have it under that very name, or has more than
+     * one (music it doesn't manage has to be removed on the server).
      */
-    suspend fun remove(artist: String, album: String?): Boolean {
+    suspend fun remove(artist: String, album: String?, year: Int? = null): Boolean {
         val (c, k) = require()
-        val key = Names.normalize(artist)
-        val found = client.artists(c, k).firstOrNull { Names.normalize(it.artistName) == key } ?: return false
-        if (album == null) {
-            client.deleteArtist(c, k, found.id, deleteFiles = true, exclude = false)
-            return true
-        }
-        val title = Names.normalize(SongMatch.cleanTitle(album))
-        val hit = client.albums(c, k, found.id).firstOrNull { Names.normalize(SongMatch.cleanTitle(it.title)) == title } ?: return false
-        client.deleteAlbum(c, k, hit.id, deleteFiles = true, exclude = false)
-        return true
+        val removal = MusicRemoval(client)
+        return if (album == null) removal.artist(c, k, artist) else removal.album(c, k, artist, album, year)
     }
 }

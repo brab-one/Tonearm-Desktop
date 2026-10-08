@@ -17,9 +17,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -56,9 +58,13 @@ class UiState {
     /** Songs waiting for "Add to playlist". */
     var addToPlaylist by mutableStateOf<List<ConnectSong>?>(null)
     var prompt by mutableStateOf<Prompt?>(null)
+    var confirm by mutableStateOf<Confirm?>(null)
 }
 
 data class Prompt(val title: String, val label: String, val initial: String, val confirm: String, val onConfirm: (String) -> Unit)
+
+/** A yes/no question before something that can't be undone. */
+data class Confirm(val title: String, val text: String, val action: String, val onConfirm: () -> Unit)
 
 val LocalUi = staticCompositionLocalOf<UiState> { error("UiState not provided") }
 val LocalNav = staticCompositionLocalOf<Navigator> { error("Navigator not provided") }
@@ -106,29 +112,81 @@ fun LikeButton(app: DesktopApp, song: ConnectSong, size: Dp = 36.dp) {
 }
 
 fun DesktopApp.like(song: ConnectSong, like: Boolean) {
-    scope.launch { attempt { likes.set(song, like) } }
+    scope.launch {
+        attempt {
+            likes.set(song, like)
+            // A liked song isn't disliked anymore.
+            if (like && dislikes.isDisliked(song.artist, song.title)) dislikes.set(song.artist.orEmpty(), song.title, song.album, false)
+        }
+    }
+}
+
+/** Whether songs can be disliked: the Tonearm server keeps dislikes. */
+val DesktopApp.canDislike: Boolean get() = tonearmServer.server.value?.dislikes == true
+
+fun DesktopApp.dislike(song: ConnectSong, on: Boolean) {
+    scope.launch {
+        attempt {
+            setDisliked(song, on)
+            message(if (on) "Disliked “${song.title}”: it goes to the end of searches and out of mixes and picks" else "“${song.title}” isn't disliked anymore")
+        }
+    }
+}
+
+@Composable
+fun DislikeButton(app: DesktopApp, song: ConnectSong, size: Dp = 36.dp) {
+    val disliked by app.dislikes.state.collectAsState()
+    val on = remember(disliked, song) { app.dislikes.isDisliked(song.artist, song.title) }
+    IconButton(onClick = { app.dislike(song, !on) }, modifier = Modifier.size(size)) {
+        Icon(
+            if (on) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown, if (on) "Remove dislike" else "Dislike",
+            tint = if (on) Hud.colors.danger else Hud.colors.dim, modifier = Modifier.size(size * 0.5f),
+        )
+    }
 }
 
 /** Whether music can be removed from the server here: through Lidarr, with the right to delete in it. */
 val DesktopApp.canRemoveMusic: Boolean get() = lidarr.current.value?.limited == false
 
 /**
- * Removes an artist, or one of their albums, from the server: Lidarr deletes it with its files, and Navidrome
- * is asked to rescan so it's gone there too. Asks for the name first. [after] runs once it's done.
+ * Removes an artist, or one of their albums ([year] telling same-titled ones apart), from the server: Lidarr deletes
+ * it with its files, and Navidrome is asked to rescan so it's gone there too. Asks first. Its songs leave the queue
+ * ([queued] picks them out), and [after] runs once it's done.
  */
-fun DesktopApp.removeFromServer(ui: UiState, artist: String, album: String?, after: () -> Unit = {}) {
+fun DesktopApp.removeFromServer(ui: UiState, artist: String, album: String?, year: Int?, queued: (ConnectSong) -> Boolean, after: () -> Unit = {}) {
     val name = album ?: artist
-    ui.prompt = Prompt(
-        "Remove “$name” from the server?",
-        "Its files are deleted. Type the name to confirm", "", "Remove",
-    ) { typed ->
-        if (typed.trim() != name) return@Prompt message("The name didn't match; nothing removed")
+    ui.confirm = Confirm(
+        "Delete “$name” from the server?",
+        (if (album != null) "The album by $artist" else "Everything by $artist") +
+            " is deleted from disk by Lidarr, which won't download it again unless you ask for it. Navidrome drops it after its next scan. This can't be undone.",
+        "Delete",
+    ) {
         scope.launch {
             attempt {
-                if (!lidarr.remove(artist, album)) return@attempt message("Lidarr doesn't have “$name”, so it can't remove it; delete its files on the server")
-                runCatching { api.startScan() }
+                if (!lidarr.remove(artist, album, year)) {
+                    return@attempt message("Lidarr doesn't have “$name” under this very name, or has more than one, so nothing was deleted; delete it in Lidarr")
+                }
+                player.removeWhere { it.source == ConnectSong.SERVER && queued(it) }
                 message("Removed “$name”; Navidrome drops it after its scan")
                 after()
+                rescanSoon()
+            }
+        }
+    }
+}
+
+/** Deletes one library song from the server (its file, through Lidarr), after asking. */
+fun DesktopApp.deleteSongFromServer(ui: UiState, song: ConnectSong) {
+    ui.confirm = Confirm(
+        "Delete “${song.title}” from the server?",
+        "Lidarr deletes the file and stops watching the album, so the song isn't downloaded again (the album's other songs stay). " +
+            "Navidrome drops it after its next scan. This can't be undone.",
+        "Delete",
+    ) {
+        scope.launch {
+            attempt {
+                if (!deleteSong(song)) return@attempt message("Lidarr can't tell which file “${song.title}” is, or doesn't manage it, so nothing was deleted; delete the file on the server")
+                message("Deleted “${song.title}”; Navidrome drops it after its scan")
             }
         }
     }
@@ -156,6 +214,10 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
     val liked = app.likes.isLiked(song)
     add(MenuEntry(if (liked) "Unlike" else "Like") { app.like(song, !liked) })
     if (song.source != ConnectSong.LOCAL) add(MenuEntry("Add to playlist…") { ui.addToPlaylist = listOf(song) })
+    if (app.canDislike) {
+        val disliked = app.dislikes.isDisliked(song.artist, song.title)
+        add(MenuEntry(if (disliked) "Remove dislike" else "Dislike") { app.dislike(song, !disliked) })
+    }
     if (song.source == ConnectSong.YOUTUBE && app.lidarr.current.value != null) {
         add(MenuEntry("Request in Lidarr") {
             app.scope.launch {
@@ -173,6 +235,7 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
         ConnectSong.SERVER -> {
             song.albumId?.let { add(MenuEntry("Go to album") { nav.go(Screen.Album(it)) }) }
             song.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
+            if (app.canRemoveMusic) add(MenuEntry("Delete from server…") { app.deleteSongFromServer(ui, song) })
         }
         ConnectSong.YOUTUBE -> song.artist?.let { artist ->
             if (config.youtubeCatalog) add(MenuEntry("$artist on YouTube Music") { app.openYouTubeArtist(nav, artist) })
@@ -230,6 +293,21 @@ fun Dialogs(app: DesktopApp) {
     val ui = LocalUi.current
     ui.addToPlaylist?.let { songs -> AddToPlaylistDialog(app, songs) { ui.addToPlaylist = null } }
     ui.prompt?.let { prompt -> PromptDialog(prompt) { ui.prompt = null } }
+    ui.confirm?.let { confirm -> ConfirmDialog(confirm) { ui.confirm = null } }
+}
+
+@Composable
+private fun ConfirmDialog(confirm: Confirm, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Hud.colors.panel,
+        title = { Text(confirm.title.uppercase(), style = MaterialTheme.typography.titleLarge) },
+        text = { Text(confirm.text, style = MaterialTheme.typography.bodyMedium) },
+        confirmButton = {
+            TextButton(onClick = { onDismiss(); confirm.onConfirm() }) { Text(confirm.action.uppercase(), color = Hud.colors.danger) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", color = Hud.colors.dim) } },
+    )
 }
 
 @Composable

@@ -1,24 +1,14 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
-import kotlinx.coroutines.launch
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.LocalScrollbarStyle
 import androidx.compose.foundation.HorizontalScrollbar
-import io.github.deadeyebarb.tonearm.integrations.Fetch
+import androidx.compose.foundation.LocalScrollbarStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -34,13 +24,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -52,14 +49,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -69,8 +69,10 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.integrations.Fetch
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 /** Cover art: a server cover id (fetched through the server's mTLS client) or a YouTube Music URL. */
 @Composable
@@ -243,6 +245,8 @@ fun SongRow(
     val ui = LocalUi.current
     val liked by app.likes.liked.collectAsState()
     val isLiked = io.github.deadeyebarb.tonearm.desktop.DesktopLikes.key(song.source, song.id) in liked
+    val dislikes by app.dislikes.state.collectAsState()
+    val isDisliked = remember(dislikes, song) { app.dislikes.isDisliked(song.artist, song.title) }
     val menu = { songMenu(app, nav, ui, song, extraMenu) }
     val fetch = rememberFetchState(app, song, requested)
     // Held here: once its menu opens the row isn't hovered anymore, and the button must stay.
@@ -254,6 +258,7 @@ fun SongRow(
             .background(if (playing) hud.accent.copy(alpha = 0.12f) else if (hovered) hud.panelHigh else Color.Transparent)
             .hoverable(hover)
             .clickable(onClick = onPlay)
+            .alpha(if (isDisliked && !playing) 0.45f else 1f)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -281,7 +286,8 @@ fun SongRow(
         }
         Spacer(Modifier.width(8.dp))
         Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
-            if (hovered || isLiked) LikeButton(app, song, 32.dp)
+            if (isDisliked && !hovered) Icon(Icons.Rounded.ThumbDown, "Disliked", tint = hud.dim, modifier = Modifier.size(16.dp))
+            else if (hovered || isLiked) LikeButton(app, song, 32.dp)
         }
         Text(song.duration?.let { formatDuration(it.toLong()) }.orEmpty(), style = MaterialTheme.typography.labelMedium, color = hud.dim, modifier = Modifier.width(48.dp), textAlign = TextAlign.End)
         Box(Modifier.width(32.dp)) { if (hovered || menuOpen) MoreButton(menu, menuOpen, { menuOpen = it }) }

@@ -46,7 +46,10 @@ submodule).
 - **Lidarr**: request artists and albums, follow the downloads
 - **Search** across the library, YouTube Music and Deezer at once, best matches first whatever the source,
   with "Ask the AI" for searches that describe music
-- **Remove from server**: an album or artist goes from Lidarr with its files, and Navidrome after its scan
+- **Remove from server**: a song, an album or an artist goes from Lidarr with its files (after a yes), and
+  Navidrome after its scan; Lidarr won't download it again unless you ask
+- **Dislike** a song (thumbs-down in the player bar or its menu, with the Tonearm server 1.5.4 or later): it's
+  skipped, goes to the end of searches and out of mixes and picks, the same on the phone
 - **Wanted** tab on the Lidarr screen: what Lidarr is still looking for, each searchable again
 - **Discover** (with the Tonearm server): discovery picks (artists you don't have that yours point to, from
   Deezer's related artists, each with an album) and AI picks (from the server's AI: Ollama, an OpenAI-style

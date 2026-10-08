@@ -9,6 +9,8 @@ import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
 import io.github.deadeyebarb.tonearm.subsonic.NoServerException
 import io.github.deadeyebarb.tonearm.connect.AiPicks
+import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
+import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.connect.Played
 import java.io.IOException
 import kotlinx.coroutines.flow.map
@@ -85,6 +87,8 @@ class DesktopApp {
     private val connectClient = ConnectClient(integrationHttp, json)
     /** The Tonearm server at the music server's address: Connect, and Lidarr with its key. */
     val tonearmServer = ConnectRouter(connectClient)
+    /** Disliked songs and artists said no to, from the Tonearm server. */
+    val dislikes = Dislikes(connectClient, tonearmServer) { sessions.current() }
     val lidarr = DesktopLidarr(LidarrClient(integrationHttp, json), config, tonearmServer, scope)
     val youtube = YouTubeMusic(youtubeClient)
 
@@ -99,7 +103,8 @@ class DesktopApp {
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
     val songRequests = SongRequests(LidarrClient(integrationHttp, json))
     val sources = PlaylistSources(youtubeClient, youtube)
-    private val continuation = Continuation(api, youtube)
+    private val continuation = Continuation(api, youtube, dislikes::isDisliked)
+    private val removal = MusicRemoval(LidarrClient(integrationHttp, json))
 
     val player = DesktopPlayer(StreamProxy(sessions, youtube, youtubeClient), api, sessions, config, ::continueQueue, ::played)
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
@@ -135,7 +140,44 @@ class DesktopApp {
     }
 
     /** "Not for me": the Tonearm server leaves [artist] out of the picks from now on. */
-    suspend fun dismiss(artist: String) = connectClient.dismiss(sessions.current() ?: throw NoServerException(), artist)
+    suspend fun dismiss(artist: String) {
+        connectClient.dismiss(sessions.current() ?: throw NoServerException(), artist)
+        dislikes.refresh()
+    }
+
+    /**
+     * Dislikes [song] or takes that back. A disliked song isn't liked anymore, and when it's the one playing,
+     * the player moves on.
+     */
+    suspend fun setDisliked(song: ConnectSong, on: Boolean) {
+        dislikes.set(song.artist.orEmpty(), song.title, song.album, on)
+        if (!on) return
+        val current = player.state.value.current
+        if (current != null && current.id == song.id && current.source == song.source) player.next()
+        // The dislike is saved; not liking it anymore may fail on its own.
+        if (likes.isLiked(song)) runCatching { likes.set(song, false) }
+    }
+
+    /**
+     * Deletes a library song for good: Lidarr deletes its file and stops watching its album (or it would fetch the
+     * song again), and Navidrome drops it at its scan. It leaves the queue, so the player doesn't stop at it.
+     * False when Lidarr doesn't manage that song, or can't tell which file it is.
+     */
+    suspend fun deleteSong(song: ConnectSong): Boolean {
+        val (config, key) = lidarr.require()
+        if (!removal.librarySong(config, key, api, song.id)) return false
+        player.removeWhere { it.source == ConnectSong.SERVER && it.id == song.id }
+        rescanSoon()
+        return true
+    }
+
+    /** Has Navidrome look at its folders once Lidarr is done deleting (it deletes in the background). */
+    fun rescanSoon() {
+        scope.launch {
+            delay(10_000)
+            runCatching { api.startScan() }
+        }
+    }
 
     /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones, a [seed] for ones like that. */
     suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks =
@@ -256,6 +298,15 @@ class DesktopApp {
     init {
         // Notice when the Tonearm server appears, goes, or the music server changes. Started last: it needs
         // everything above, and runs on another thread right away.
+        scope.launch {
+            config.state.map { it.server }.distinctUntilChanged().collectLatest {
+                // What the phone disliked shows up here within a few minutes.
+                while (true) {
+                    dislikes.refresh()
+                    delay(5 * 60_000L)
+                }
+            }
+        }
         scope.launch {
             config.state.map { it.server }.distinctUntilChanged().collectLatest {
                 while (true) {

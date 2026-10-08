@@ -341,6 +341,7 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                     }
                 }
                 Spacer(Modifier.width(4.dp))
+                if (app.canDislike) DislikeButton(app, song)
                 LikeButton(app, song)
             } else {
                 Text("NOTHING PLAYING", style = MaterialTheme.typography.labelMedium, color = hud.dim)
