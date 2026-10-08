@@ -26,9 +26,9 @@ submodule).
 - **More like this**: right-click a song, album, artist or playlist (or use the button on its page) for a
   page of similar artists (in your library or not; right-click to request), **Play similar songs** (the
   server's similar songs, else YouTube Music's radio) and, with the Tonearm server's AI, albums like it
-- **Weekly picks** (Discover screen): the first few AI picks downloaded every week into a playlist that's
-  deleted a week later (music included) unless you like it and give it a name; albums with liked songs stay
-  either way
+- **Weekly picks** (Discover screen): the first few AI picks downloaded every week, their standout songs in a
+  playlist that's deleted a week later (music included) unless you like it and give it a name; albums with liked
+  songs stay either way. With the Tonearm server's picks folders, they go into a library only you see
 - **YouTube Music artists and albums**: bios, popular songs, radio and the albums you don't have, playable
   and requestable
 - **This computer**: music folders on the PC (FLAC, MP3, AAC, Opus, WAV…), played straight from disk

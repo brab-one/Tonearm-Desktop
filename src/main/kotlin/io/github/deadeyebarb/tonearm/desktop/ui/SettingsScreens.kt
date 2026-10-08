@@ -232,6 +232,7 @@ private fun buildServer(existing: ServerConfig?, url: String, user: String, pass
 @Composable
 private fun LidarrStatus(app: DesktopApp) {
     val current by app.lidarr.current.collectAsState()
+    val server by app.tonearmServer.server.collectAsState()
     Text(
         "Requests, downloads, weekly picks and removing music. Lidarr comes through the Tonearm server on your music " +
             "server, which holds its key, so there's nothing to connect here.",
@@ -240,6 +241,8 @@ private fun LidarrStatus(app: DesktopApp) {
     Text(
         when {
             current == null -> "Not available: the Tonearm server needs LIDARR_URL and LIDARR_API_KEY (see its README)."
+            current?.limited == true && server?.picksFolder != null ->
+                "✓ Through the Tonearm server. You can request music, see downloads and get weekly picks of your own; removing music is for its admins."
             current?.limited == true -> "✓ Through the Tonearm server. You can request music and see downloads; weekly picks and removing music are for its admins."
             else -> "✓ Through the Tonearm server."
         },

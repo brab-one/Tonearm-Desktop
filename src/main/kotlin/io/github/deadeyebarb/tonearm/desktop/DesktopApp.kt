@@ -101,7 +101,7 @@ class DesktopApp {
 
     val catalog = YouTubeCatalog(youtube)
     val fetches = FetchTracker(LidarrClient(integrationHttp, json), api)
-    val songRequests = SongRequests(LidarrClient(integrationHttp, json))
+    val songRequests = SongRequests(LidarrClient(integrationHttp, json), ownPicks = { tonearmServer.server.value?.picksFolder })
     val sources = PlaylistSources(youtubeClient, youtube)
     private val continuation = Continuation(api, youtube, dislikes::isDisliked)
     private val removal = MusicRemoval(LidarrClient(integrationHttp, json))
@@ -215,7 +215,7 @@ class DesktopApp {
                     val session = sessions.current()
                     // Lidarr may come from the Tonearm server, which has to be looked up first after a start.
                     runCatching { tonearmServer.refresh(session) }
-                    val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited }
+                    val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited && tonearmServer.server.value?.picksFolder == null }
                     if (session != null && lidarrSetup != null) {
                         checked = System.currentTimeMillis()
                         runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }.getOrNull()?.let(::message)

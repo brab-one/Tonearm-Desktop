@@ -82,7 +82,8 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
     val hud = Hud.colors
     val current = picks
     Column(Modifier.padding(bottom = 16.dp)) {
-        if (full && lidarr?.limited == false) WeeklyCard(app, nav)
+        // Admins, and everyone with a picks folder of their own.
+        if (full && lidarr?.let { !it.limited || server?.picksFolder != null } == true) WeeklyCard(app, nav)
         SectionHeader(if (full) "Albums for you" else "AI picks for you") {
             if (current != null && !current.running) HudButton("Ask again", { asks++ }, filled = false)
         }
@@ -217,12 +218,14 @@ private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
     val scope = rememberCoroutineScope()
     var settings by remember { mutableStateOf<WeeklySettings?>(null) }
     var current by remember { mutableStateOf<WeeklyBatch?>(null) }
+    var waiting by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var changed by remember { mutableIntStateOf(0) }
     LaunchedEffect(changed) {
         val session = app.sessions.current() ?: return@LaunchedEffect
         settings = runCatching { app.weekly.settings(session) }.getOrNull()
         current = runCatching { app.weekly.batches(session) }.getOrDefault(emptyList()).maxByOrNull { it.state.created }
+        waiting = app.weekly.waiting()
     }
     fun set(next: WeeklySettings) {
         val session = app.sessions.current() ?: return
@@ -252,6 +255,8 @@ private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
                 Switch(settings?.on == true, { set((settings ?: WeeklySettings()).copy(on = it)) }, enabled = !busy && settings != null,
                     colors = SwitchDefaults.colors(checkedTrackColor = hud.accent))
             }
+            // Waiting for the server's admin to set up this user's own picks folder.
+            if (settings?.on == true) waiting?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 8.dp)) }
             settings?.takeIf { it.on }?.let { on ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 10.dp)) {
                     for (n in listOf(3, 5, 10)) HudButton("$n albums a week", { if (on.albums != n) set(on.copy(albums = n)) }, filled = on.albums == n, enabled = !busy)
