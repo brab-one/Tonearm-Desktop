@@ -340,6 +340,11 @@ class DesktopPlayer(
         _state.update { st ->
             st.copy(queue = st.queue.filterIndexed { i, _ -> i != index }, index = if (st.index > index) st.index - 1 else st.index)
         }
+        if (_state.value.queue.isEmpty()) {
+            // Nothing left: the radio is over, and what it was still looking for is dropped.
+            refills.reset()
+            _state.update { it.copy(radio = null, fetchingMore = false) }
+        }
         ensureNext()
         maybeContinue()
     }
@@ -593,9 +598,12 @@ class DesktopPlayer(
         append(more)
     }
 
-    /** Songs at the end of the queue; when it ran out while they were looked for, the first of them plays. */
+    /**
+     * Songs at the end of the queue; when it ran out while they were looked for, the first of them plays. A queue
+     * emptied meanwhile stays empty.
+     */
     private fun append(more: List<ConnectSong>) {
-        if (more.isEmpty()) return
+        if (more.isEmpty() || _state.value.queue.isEmpty()) return
         val s = _state.value
         val ranOut = entries.isEmpty() && !stopped && nextIndex(s.index, wrap = false) == null
         enqueueNow(more)

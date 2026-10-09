@@ -100,7 +100,7 @@ class RadioTest {
     fun `a batch that comes after another queue started is dropped`() {
         val refills = Refills()
         val ticket = refills.start()
-        // play() of another queue, or the radio stopped, while it was on its way.
+        // play() of another queue, the radio stopped, or the queue emptied, while it was on its way.
         refills.reset()
         assertFalse(refills.busy)
         assertFalse(refills.done(ticket, found = true))
