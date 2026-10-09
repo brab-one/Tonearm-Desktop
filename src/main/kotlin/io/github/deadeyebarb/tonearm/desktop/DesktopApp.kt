@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.merge
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
+import io.github.deadeyebarb.tonearm.connect.ConnectUnavailableException
 import io.github.deadeyebarb.tonearm.integrations.FetchTracker
 import java.io.File
 import kotlinx.coroutines.delay
@@ -45,6 +46,7 @@ import io.github.deadeyebarb.tonearm.net.USER_AGENT
 import io.github.deadeyebarb.tonearm.net.UserAgentInterceptor
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -161,9 +163,17 @@ class DesktopApp {
     /** Sends what was heard to the Tonearm server (when it keeps a history); what doesn't get there waits for the next song. */
     private suspend fun sendPlays() = sendingPlays.withLock {
         val batch = synchronized(unsentPlays) { unsentPlays.toList() }.ifEmpty { return@withLock }
-        val session = sessions.current() ?: return@withLock
+        val session = sessions.currentOrNull() ?: return@withLock
         try {
-            if (tonearmServer.refresh(session)?.history == true) connectClient.played(session, batch)
+            // Only an answer counts: route() looks the Tonearm server up without hiding a failure, so plays wait
+            // while it can't be reached, and are dropped when there is none.
+            val history = try {
+                tonearmServer.route(session)
+                tonearmServer.refresh(session)?.history == true
+            } catch (_: ConnectUnavailableException) {
+                false
+            }
+            if (history) connectClient.played(session, batch)
             synchronized(unsentPlays) { unsentPlays.removeAll(batch.toSet()) }
         } catch (_: IOException) {
         }
@@ -224,7 +234,8 @@ class DesktopApp {
         scope.launch {
             config.state.map { it.server }.distinctUntilChanged().collectLatest {
                 while (true) {
-                    tonearmServer.refresh(sessions.current())
+                    // A session that can't be built yet (a locked keyring) is tried again next time.
+                    keepGoing { tonearmServer.refresh(sessions.current()) }
                     delay(5 * 60_000L)
                 }
             }
@@ -242,9 +253,9 @@ class DesktopApp {
             while (true) {
                 val running = File(AppDirs.config, "weekly-run.json").exists()
                 if (running || System.currentTimeMillis() - checked >= 30 * 60_000L) {
-                    val session = sessions.current()
+                    val session = sessions.currentOrNull()
                     // Lidarr may come from the Tonearm server, which has to be looked up first after a start.
-                    runCatching { tonearmServer.refresh(session) }
+                    if (session != null) runCatching { tonearmServer.refresh(session) }
                     val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited && tonearmServer.server.value?.picksFolder == null }
                     if (session != null && lidarrSetup != null) {
                         checked = System.currentTimeMillis()
@@ -314,7 +325,7 @@ class DesktopApp {
     /** "When the queue ends": more of the same, or another playlist. */
     private suspend fun continueQueue(last: ConnectSong, played: Set<String>): List<ConnectSong> {
         val cfg = config.state.value
-        val session = sessions.current()
+        val session = sessions.currentOrNull()
         val next = when (cfg.whenQueueEnds) {
             "similar" -> {
                 // A file on this computer has no similar songs on the server; YouTube Music's radio finds them.
@@ -328,24 +339,25 @@ class DesktopApp {
     }
 
     init {
-        // Notice when the Tonearm server appears, goes, or the music server changes. Started last: it needs
-        // everything above, and runs on another thread right away.
+        // What the phone disliked shows up here within a few minutes. Started last: it needs everything above,
+        // and runs on another thread right away.
         scope.launch {
             config.state.map { it.server }.distinctUntilChanged().collectLatest {
-                // What the phone disliked shows up here within a few minutes.
                 while (true) {
-                    dislikes.refresh()
+                    keepGoing { dislikes.refresh() }
                     delay(5 * 60_000L)
                 }
             }
         }
-        scope.launch {
-            config.state.map { it.server }.distinctUntilChanged().collectLatest {
-                while (true) {
-                    tonearmServer.refresh(sessions.current())
-                    delay(5 * 60_000L)
-                }
-            }
+    }
+
+    /** A round of a background loop: one that fails (no session yet, no network) leaves the loop going. */
+    private suspend fun keepGoing(round: suspend () -> Unit) {
+        try {
+            round()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
         }
     }
 
