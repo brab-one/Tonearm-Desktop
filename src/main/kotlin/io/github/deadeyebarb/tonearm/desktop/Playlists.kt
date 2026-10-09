@@ -12,7 +12,9 @@ import io.github.deadeyebarb.tonearm.likes.findSong
 import io.github.deadeyebarb.tonearm.subsonic.Playlist
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
+import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
 import io.github.deadeyebarb.tonearm.youtube.YouTubeMusic
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -226,36 +228,66 @@ class DesktopPlaylists(
         return count
     }
 
-    /** Moves placeholders that have arrived in the library into their playlists, in place. */
+    /**
+     * Moves placeholders that have arrived in the library into their playlists, in place. Each playlist is saved
+     * here as soon as the server has it; one that fails keeps its placeholders for next time.
+     */
     suspend fun resolve(): Int = lock.withLock {
-        val session = sessions.current() ?: return@withLock 0
+        val session = sessions.currentOrNull() ?: return@withLock 0
         var moved = 0
-        val map = _pending.value.toMutableMap()
-        for ((playlistId, tracks) in map.toMap()) {
-            val found = tracks.mapNotNull { track -> runCatching { api.findSong(track.ref, session) }.getOrNull()?.let { track to it } }
+        for ((playlistId, tracks) in _pending.value) {
+            val found = tracks.mapNotNull { track -> orNull { api.findSong(track.ref, session) }?.let { track to it } }
             if (found.isEmpty()) continue
-            val playlist = runCatching { api.playlist(playlistId, session) }.getOrNull()
-            if (playlist == null) {
-                map.remove(playlistId)
+            val playlist = try {
+                api.playlist(playlistId, session)
+            } catch (e: SubsonicApiException) {
+                // Only a playlist that's gone takes its placeholders with it.
+                if (e.code == 70) save(_pending.value - playlistId)
+                continue
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
                 continue
             }
             // Rebuild the order with the arrived songs in their placeholders' spots; the placeholders
-            // still waiting get re-anchored to the song now before them.
+            // still waiting get re-anchored to the song now before them. A song already there got there
+            // the last time, when it couldn't be saved here.
+            val present = playlist.entry.map { it.id }.toSet()
             val arrived = found.toMap()
             val ids = mutableListOf<String>()
             val remaining = mutableListOf<PendingTrack>()
             for (item in merged(playlist, tracks)) {
                 when (item) {
                     is PlaylistItem.Entry -> ids += item.song.id
-                    is PlaylistItem.Pending -> arrived[item.track]?.let { ids += it.id } ?: run { remaining += item.track.copy(after = ids.lastOrNull()) }
+                    is PlaylistItem.Pending -> {
+                        val song = arrived[item.track]
+                        when {
+                            song == null -> remaining += item.track.copy(after = ids.lastOrNull())
+                            song.id !in present -> ids += song.id
+                        }
+                    }
                 }
             }
-            api.replacePlaylist(playlistId, ids, session)
-            map[playlistId] = remaining
+            try {
+                api.replacePlaylist(playlistId, ids, session)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                continue
+            }
+            save(_pending.value + (playlistId to remaining))
             moved += found.size
         }
-        save(map)
         moved
+    }
+
+    /** [block]'s result, or null when it failed (cancelling still cancels). */
+    private suspend fun <T : Any> orNull(block: suspend () -> T?): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
     }
 
     /**
