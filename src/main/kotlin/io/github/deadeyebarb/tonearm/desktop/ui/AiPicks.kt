@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -100,8 +102,11 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
         current?.seed?.let { Text("More like $it", style = MaterialTheme.typography.bodyMedium, color = hud.accent2, modifier = Modifier.padding(top = 4.dp)) }
         (failed ?: current?.problem)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
         current?.picks?.forEach { pick ->
-            AiPickRow(app, nav, pick, canRequest = lidarr != null, youtube = config.playYouTube) {
-                picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+            // Keyed, so taking a pick out doesn't hand the rows below it each other's state.
+            key(pick.artist, pick.album) {
+                AiPickRow(app, nav, pick, canRequest = lidarr != null, youtube = config.playYouTube) {
+                    picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist })
+                }
             }
         }
     }
@@ -114,17 +119,24 @@ fun AiPicksSection(app: DesktopApp, nav: Navigator, full: Boolean = false) {
 @Composable
 fun DiscoverScreen(app: DesktopApp, nav: Navigator) {
     val server by app.tonearmServer.server.collectAsState()
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp)) {
-        ScreenTitle("Discover", "ARTISTS AND ALBUMS YOU DON'T HAVE, FROM WHAT YOU PLAY")
-        if (server?.discovery == true) DiscoveryPicksSection(app, nav)
-        if (server?.recommendations == true) AiPicksSection(app, nav, full = true)
-        if (server?.discovery != true && server?.recommendations != true) {
-            Text(
-                "Discovery and AI picks come from the Tonearm server on your music server (AI picks once it has Ollama, " +
-                    "OLLAMA_URL). Its README has the setup. Right-click anything for More like this in the meantime.",
-                style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim, modifier = Modifier.padding(top = 12.dp),
-            )
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            // The title has its own padding, like on the other screens.
+            ScreenTitle("Discover", "ARTISTS AND ALBUMS YOU DON'T HAVE, FROM WHAT YOU PLAY")
+            Column(Modifier.padding(horizontal = 28.dp)) {
+                if (server?.discovery == true) DiscoveryPicksSection(app, nav)
+                if (server?.recommendations == true) AiPicksSection(app, nav, full = true)
+                if (server?.discovery != true && server?.recommendations != true) {
+                    Text(
+                        "Discovery and AI picks come from the Tonearm server on your music server (AI picks once it has Ollama, " +
+                            "OLLAMA_URL). Its README has the setup. Right-click anything for More like this in the meantime.",
+                        style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim, modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            }
         }
+        ColumnScrollbar(scroll)
     }
 }
 
@@ -170,8 +182,9 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
             style = MaterialTheme.typography.bodyMedium, color = hud.dim,
         )
         (failed ?: current?.problem?.takeUnless { current.running })?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = hud.danger, modifier = Modifier.padding(top = 4.dp)) }
-        current?.picks?.forEach { pick ->
-            Row(Modifier.fillMaxWidth().widthIn(max = 900.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        val activity by app.fetches.activity.collectAsState()
+        current?.picks?.forEach { pick -> key(pick.artist, pick.album) {
+            Row(Modifier.widthIn(max = 900.dp).fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Cover(app, pick.coverUrl ?: pick.imageUrl, Modifier.size(56.dp))
                 Column(Modifier.weight(1f)) {
                     Text(pick.album ?: pick.artist, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -192,7 +205,11 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
                         }
                     }, icon = Icons.Rounded.PlayArrow, filled = false)
                 }
-                if (lidarr != null) {
+                // An album Lidarr already wants (say from weekly picks) says so instead of offering it again.
+                val fetch = pick.album?.let { activity.of(it, pick.artist) }
+                if (fetch != null) {
+                    HudTag(fetch.label())
+                } else if (lidarr != null) {
                     HudButton("Request", {
                         scope.launch {
                             app.attempt {
@@ -207,7 +224,7 @@ private fun DiscoveryPicksSection(app: DesktopApp, nav: Navigator) {
                 }
                 NotForMe(app, pick.artist) { picks = current.copy(picks = current.picks.filterNot { it.artist == pick.artist }) }
             }
-        }
+        } }
     }
 }
 
@@ -274,7 +291,8 @@ private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
 private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest: Boolean, youtube: Boolean, onGone: () -> Unit) {
     val scope = rememberCoroutineScope()
     val hud = Hud.colors
-    Row(Modifier.fillMaxWidth().widthIn(max = 900.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    val activity by app.fetches.activity.collectAsState()
+    Row(Modifier.widthIn(max = 900.dp).fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(Modifier.weight(1f)) {
             Text(pick.album, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text((pick.artist + (pick.year?.let { " · $it" } ?: "")), style = MaterialTheme.typography.labelMedium, color = hud.accent2, maxLines = 1)
@@ -290,7 +308,11 @@ private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest:
                 }
             }, icon = Icons.Rounded.PlayArrow, filled = false)
         }
-        if (canRequest) {
+        // An album Lidarr already wants (say from weekly picks) says so instead of offering it again.
+        val fetch = activity.of(pick.album, pick.artist)
+        if (fetch != null) {
+            HudTag(fetch.label())
+        } else if (canRequest) {
             HudButton("Request", {
                 scope.launch {
                     app.attempt {
@@ -307,11 +329,13 @@ private fun AiPickRow(app: DesktopApp, nav: Navigator, pick: AiPick, canRequest:
 /** "Not for me": the Tonearm server leaves [artist] out of the picks from now on (until they're played a few times). */
 @Composable
 private fun NotForMe(app: DesktopApp, artist: String, onGone: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    IconButton(onClick = {
-        onGone()
-        scope.launch { app.attempt { app.dismiss(artist); app.message("No more $artist in your picks") } }
-    }) {
-        Icon(Icons.Rounded.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp))
+    Tip("Not for me: no more $artist") {
+        IconButton(onClick = {
+            onGone()
+            // In the app's scope: the row goes away at once, and its own scope with it.
+            app.scope.launch { app.attempt { app.dismiss(artist); app.message("No more $artist in your picks") } }
+        }) {
+            Icon(Icons.Rounded.ThumbDown, "Not for me: no more $artist", tint = Hud.colors.dim, modifier = Modifier.size(20.dp))
+        }
     }
 }

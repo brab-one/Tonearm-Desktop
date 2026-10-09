@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -17,11 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
@@ -38,6 +42,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.desktop.DesktopLikes
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
@@ -75,11 +81,13 @@ fun SongListPage(
     note: String? = null,
     buttons: @Composable () -> Unit = {},
     footer: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null,
+    list: LazyListState = rememberLazyListState(),
 ) {
     val hud = Hud.colors
     val ui = LocalUi.current
     val state by app.player.state.collectAsState()
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = padding) {
         item {
             Row(Modifier.padding(vertical = 16.dp), verticalAlignment = Alignment.Bottom) {
                 cover()
@@ -90,7 +98,7 @@ fun SongListPage(
                     subtitle?.let {
                         Text(it, style = MaterialTheme.typography.titleMedium, color = hud.accent2, modifier = if (onSubtitle != null) Modifier.clickable(onClick = onSubtitle) else Modifier)
                     }
-                    Text("${songs.size} SONGS // ${formatDuration(songs.sumOf { it.duration ?: 0 }.toLong())}", style = MaterialTheme.typography.labelMedium, color = hud.dim)
+                    Text("${count(songs.size, "SONG", "SONGS")} // ${formatDuration(songs.sumOf { it.duration ?: 0 }.toLong())}", style = MaterialTheme.typography.labelMedium, color = hud.dim)
                     Spacer(Modifier.height(14.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HudButton("Play", { app.player.play(songs) }, icon = Icons.Rounded.PlayArrow, enabled = songs.isNotEmpty())
@@ -112,6 +120,8 @@ fun SongListPage(
         }
         footer?.invoke(this)
     }
+    ListScrollbar(list)
+    }
 }
 
 @Composable
@@ -119,13 +129,24 @@ fun LikedScreen(app: DesktopApp, nav: Navigator) {
     val liked by app.likes.liked.collectAsState()
     val pending by app.likes.pending.items.collectAsState()
     val localTracks by app.local.tracks.collectAsState()
-    val loader = rememberLoad(app.config.state.value.server?.baseUrl, liked.size) {
-        app.likes.syncNow()
-        runCatching { app.likes.resolveNow() }
-        app.likes.refresh()
+    // Synced with the phone on the first load only. Later loads just fetch what's starred, and keep the list
+    // (and where it's scrolled to) on screen meanwhile.
+    var synced by remember { mutableStateOf(false) }
+    val loader = rememberLoad(app.config.state.value.server?.baseUrl) {
+        if (!synced) {
+            app.likes.syncNow()
+            runCatching { app.likes.resolveNow() }
+            app.likes.refresh()
+            synced = true
+        }
         app.api.starred().song.map { it.toConnectSong() }
     }
-    LoadContent(loader) { server ->
+    LoadContent(loader) { starred ->
+        // An unlike takes the song off at once; a like from elsewhere (the player bar, a menu) fetches the list again.
+        val server = starred.filter { DesktopLikes.key(it.source, it.id) in liked }
+        val shown = remember(starred) { starred.map { DesktopLikes.key(it.source, it.id) }.toSet() }
+        val newLikes = liked.count { it.startsWith(DesktopLikes.key(ConnectSong.SERVER, "")) && it !in shown }
+        LaunchedEffect(newLikes) { if (newLikes > 0) loader.reload() }
         val waiting = pending.mapNotNull { like ->
             like.ref.youtubeId?.let { id ->
                 ConnectSong(id = id, source = ConnectSong.YOUTUBE, title = like.ref.title, artist = like.ref.artist, album = like.ref.album, coverArt = like.ref.coverUrl, duration = like.ref.duration)
@@ -158,7 +179,9 @@ fun LocalScreen(app: DesktopApp, nav: Navigator) {
         ScreenTitle("This computer", "${tracks.size} SONGS // ${albums.size} ALBUMS IN ${config.localFolders.size} FOLDERS") {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 HudButton("Add folder", { addLocalFolder(app) }, icon = Icons.Rounded.CreateNewFolder, filled = false)
-                HudButton(if (scanning) "Scanning…" else "Rescan", { app.scope.launch { app.local.rescan() } }, filled = false, enabled = !scanning)
+                if (config.localFolders.isNotEmpty()) {
+                    HudButton(if (scanning) "Scanning…" else "Rescan", { app.scope.launch { app.local.rescan() } }, filled = false, enabled = !scanning)
+                }
             }
         }
         if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 28.dp), color = hud.accent, trackColor = hud.line)
@@ -175,10 +198,14 @@ fun LocalScreen(app: DesktopApp, nav: Navigator) {
             colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(focusedBorderColor = hud.accent, unfocusedBorderColor = hud.line),
             modifier = Modifier.padding(horizontal = 28.dp).width(320.dp),
         )
-        LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = padding) {
-            items(shown, key = { it.key }) { album ->
-                CardItem(app, album.cover, album.title, listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "), { nav.go(Screen.LocalAlbum(album.key)) })
+        val grid = rememberLazyGridState()
+        Box(Modifier.fillMaxSize()) {
+            LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), state = grid, contentPadding = padding) {
+                items(shown, key = { it.key }) { album ->
+                    CardItem(app, album.cover, album.title, listOfNotNull(album.artist, album.year?.toString()).joinToString(" · "), { nav.go(Screen.LocalAlbum(album.key)) })
+                }
             }
+            GridScrollbar(grid)
         }
     }
 }

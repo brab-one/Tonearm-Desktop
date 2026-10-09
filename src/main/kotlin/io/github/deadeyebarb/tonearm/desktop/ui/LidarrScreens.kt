@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,21 +61,29 @@ import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** Lidarr comes through the Tonearm server, which holds its key: nothing to connect here, it's set up there. */
 @Composable
 private fun NeedsLidarr(nav: Navigator, what: String) =
-    EmptyState(Icons.Rounded.CloudDownload, "Connect Lidarr", what) { HudButton("Open settings", { nav.root(Screen.Settings) }) }
+    EmptyState(Icons.Rounded.CloudDownload, "Lidarr isn't available", what) { HudButton("Settings", { nav.root(Screen.Settings) }, filled = false) }
 
 @Composable
 fun LidarrScreen(app: DesktopApp, nav: Navigator) {
     val config by app.config.state.collectAsState()
     val lidarrConfig by app.lidarr.current.collectAsState()
-    if (lidarrConfig == null) return NeedsLidarr(nav, "Request artists and albums, and follow the downloads, once Lidarr is connected.")
+    if (lidarrConfig == null) {
+        return NeedsLidarr(
+            nav,
+            "Requests and downloads come through the Tonearm server on your music server, once it's reachable and has " +
+                "LIDARR_URL and LIDARR_API_KEY (see its README). This page fills in by itself then.",
+        )
+    }
     var tab by rememberSaveable { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Lidarr", lidarrConfig?.let { if (it.viaServer) "through the Tonearm server" else it.url })
@@ -195,12 +204,18 @@ private fun DownloadsTab(app: DesktopApp) {
     var items by remember { mutableStateOf<Load<List<LidarrQueueItem>>>(Load.Loading) }
     LaunchedEffect(Unit) {
         while (true) {
-            items = try { Load.Ready(app.lidarr.queue()) } catch (e: Exception) { Load.Failed(e) }
+            items = try {
+                Load.Ready(app.lidarr.queue())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Load.Failed(e)
+            }
             delay(3_000)
         }
     }
     when (val state = items) {
-        Load.Loading -> Unit
+        Load.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = hud.accent) }
         is Load.Failed -> EmptyState(Icons.Rounded.CloudDownload, "Can't reach Lidarr", state.error.userMessage())
         is Load.Ready -> if (state.value.isEmpty()) {
             EmptyState(Icons.Rounded.CloudDownload, "Nothing downloading", "Requested music shows up here while Lidarr fetches it.")

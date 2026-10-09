@@ -134,9 +134,11 @@ fun HudButton(
     icon: ImageVector? = null,
     filled: Boolean = true,
     enabled: Boolean = true,
+    /** For what deletes something: in the danger colour, so it doesn't look like the buttons around it. */
+    danger: Boolean = false,
 ) {
     val hud = Hud.colors
-    val color = if (enabled) hud.accent else hud.dim
+    val color = if (!enabled) hud.dim else if (danger) hud.danger else hud.accent
     val shape = MaterialTheme.shapes.small
     Row(
         modifier
@@ -227,27 +229,39 @@ sealed interface Load<out T> {
     data class Failed(val error: Throwable) : Load<Nothing>
 }
 
-class Loader<T>(val state: Load<T>, val reload: () -> Unit)
+/** [last] is the value loaded last, also for earlier keys. */
+class Loader<T>(val state: Load<T>, val reload: () -> Unit, val last: T? = null)
 
 @Composable
 fun <T> rememberLoad(vararg keys: Any?, load: suspend () -> T): Loader<T> {
     var state by remember(*keys) { mutableStateOf<Load<T>>(Load.Loading) }
     var generation by remember(*keys) { mutableIntStateOf(0) }
+    var last by remember { mutableStateOf<T?>(null) }
     LaunchedEffect(*keys, generation) {
         state = try {
-            Load.Ready(load())
+            Load.Ready(load().also { last = it })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Load.Failed(e)
         }
     }
-    return Loader(state) { generation++ }
+    // A reload keeps showing what's there; after a failure (Retry) it shows that it's trying again.
+    return Loader(state, { if (state is Load.Failed) state = Load.Loading; generation++ }, last)
 }
 
+/** The spinner, the failure with a Retry, or [content]. With [keepLast], what was there stays (dimmed) while new keys load. */
 @Composable
-fun <T> LoadContent(loader: Loader<T>, modifier: Modifier = Modifier, content: @Composable (T) -> Unit) {
-    when (val state = loader.state) {
+fun <T> LoadContent(loader: Loader<T>, modifier: Modifier = Modifier, keepLast: Boolean = false, content: @Composable (T) -> Unit) {
+    val state = loader.state
+    val last = loader.last
+    if (keepLast && (state is Load.Ready || state is Load.Loading && last != null)) {
+        // One place for both, so what's shown (and where it's scrolled to) carries on when the new value comes.
+        @Suppress("UNCHECKED_CAST")
+        Box(modifier.alpha(if (state is Load.Ready) 1f else 0.5f)) { content(if (state is Load.Ready) state.value else last as T) }
+        return
+    }
+    when (state) {
         Load.Loading -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Hud.colors.accent) }
         is Load.Failed -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", state.error.userMessage(), modifier) { HudButton("Retry", loader.reload) }
         is Load.Ready -> content(state.value)
@@ -272,6 +286,8 @@ fun SongRow(
     tag: String? = null,
     /** For a song not in the library: the album (and artist) Lidarr was asked for, to show its progress. */
     requested: Pair<String, String>? = null,
+    /** The line under the title (empty for none): its artist and album unless said otherwise. */
+    detail: String = listOfNotNull(song.artist, song.album).joinToString(" · "),
     trailing: @Composable () -> Unit = {},
 ) {
     val hud = Hud.colors
@@ -291,7 +307,7 @@ fun SongRow(
     Row(
         modifier.fillMaxWidth()
             .clip(MaterialTheme.shapes.small)
-            .background(if (playing) hud.accent.copy(alpha = 0.12f) else if (hovered) hud.panelHigh else Color.Transparent)
+            .background(if (playing) hud.accent.copy(alpha = 0.12f) else if (hovered || menuOpen) hud.panelHigh else Color.Transparent)
             .hoverable(hover)
             .clickable(onClick = onPlay)
             .alpha(if (isDisliked && !playing) 0.45f else 1f)
@@ -311,7 +327,7 @@ fun SongRow(
         }
         Column(Modifier.weight(1f)) {
             Text(song.title, style = MaterialTheme.typography.titleSmall, color = if (playing) hud.accent else hud.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(song.artist, song.album).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         when {
             fetch != null -> HudTag(fetch.label(), color = if (fetch.fetch == Fetch.IN_LIBRARY) hud.ok else hud.accent)
@@ -321,7 +337,8 @@ fun SongRow(
             isLossless(song.suffix) -> HudTag("Lossless", color = hud.dim)
         }
         Spacer(Modifier.width(8.dp))
-        Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+        // As tall as the like button, so a one-line row doesn't grow when it shows on hover.
+        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
             if (isDisliked && !hovered) Icon(Icons.Rounded.ThumbDown, "Disliked", tint = hud.dim, modifier = Modifier.size(16.dp))
             else if (hovered || isLiked) LikeButton(app, song, 32.dp)
         }
@@ -419,6 +436,9 @@ private fun RowArrow(icon: ImageVector, label: String, modifier: Modifier, onCli
 val GridCellsCards = GridCells.Adaptive(176.dp)
 
 fun LazyGridScope.fullWidth(content: @Composable () -> Unit) = item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { content() }
+
+/** "1 SONG", "12 SONGS". */
+fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
 
 fun formatDuration(seconds: Long): String {
     val h = seconds / 3600
