@@ -349,12 +349,18 @@ class DesktopApp {
 
     /**
      * Starts Picks radio: endless music from the weekly picks and the songs liked lately, from the Tonearm server or
-     * made here. Throws with the reason when there's nothing to start from.
+     * made here. Throws with the reason when there's nothing to start from: no session (the keyring, a certificate),
+     * a music server that doesn't answer, or nothing picked or liked yet.
      */
     suspend fun startPicksRadio() {
+        val session = sessions.require()
         val seed = RadioSeed(RadioSeed.PICKS)
-        val first = mixer.radio(sessions.current(), seed, emptyList(), config.state.value.playYouTube)
-        if (first.songs.isEmpty()) throw IOException(first.problem ?: Mixer.NO_PICKS)
+        val first = mixer.radio(session, seed, emptyList(), config.state.value.playYouTube)
+        if (first.songs.isEmpty()) {
+            // The picks and likes that couldn't be fetched count as none: when the server is why, it says so.
+            if ((first.problem ?: Mixer.NO_PICKS) == Mixer.NO_PICKS) api.ping(session)
+            throw IOException(first.problem ?: Mixer.NO_PICKS)
+        }
         player.play(first.songs.map { it.toConnectSong() }, radio = seed)
     }
 
