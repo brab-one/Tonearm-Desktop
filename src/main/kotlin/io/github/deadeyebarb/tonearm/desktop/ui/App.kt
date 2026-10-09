@@ -188,14 +188,16 @@ private val railItems = listOf(
     RailItem(Screen.Settings, "Settings", Icons.Rounded.Settings),
 )
 
+/** The main window's content. [quickOpen]: the quick switcher (Ctrl+K) is open, and [onQuickClose] closes it. */
 @Composable
-fun TonearmApp(app: DesktopApp, nav: Navigator) {
+fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQuickClose: () -> Unit = {}) {
     val hud = Hud.colors
     val config by app.config.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val ui = remember { UiState() }
     val states = rememberSaveableStateHolder()
     var queueOpen by remember { mutableStateOf(false) }
+    val quickPlaylists = remember { QuickPlaylists(app) }
     LaunchedEffect(Unit) { app.messages.collect { snackbar.showSnackbar(it) } }
     // What's started here remembers where, for the player bar to go back to.
     LaunchedEffect(nav) { app.player.origin = { nav.entry } }
@@ -253,6 +255,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
             )
         }
         Dialogs(app)
+        if (quickOpen && config.server != null) QuickSwitcher(app, nav, quickPlaylists, onQuickClose)
     }
     }
 }

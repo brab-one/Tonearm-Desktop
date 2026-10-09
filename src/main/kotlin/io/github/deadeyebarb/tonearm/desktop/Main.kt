@@ -4,7 +4,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -97,6 +99,7 @@ fun main() {
                 .build()
         }
         val nav = remember { Navigator() }
+        var quickOpen by remember { mutableStateOf(false) }
         // The mouse's back and forward buttons go back and forth like in a browser. AWT numbers them
         // 4/5 on Windows and macOS. On X11 they're 6/7: there 4/5 are the horizontal scroll (a tilt wheel,
         // a touchpad's sideways swipe), which mustn't page through screens.
@@ -154,6 +157,8 @@ fun main() {
                     event.key == Key.MediaNext -> MediaKeys.run(app.player, MediaKeys.NEXT, inWindow = true)
                     event.key == Key.MediaPrevious -> MediaKeys.run(app.player, MediaKeys.PREVIOUS, inWindow = true)
                     event.isCtrlPressed && event.key == Key.P -> app.player.togglePlay()
+                    // The quick switcher, once there's a library to jump around in.
+                    event.isCtrlPressed && event.key == Key.K && app.config.state.value.server != null -> quickOpen = !quickOpen
                     event.key == Key.Back -> nav.back()
                     event.key == Key.Forward -> nav.forward()
                     else -> return@Window false
@@ -183,7 +188,7 @@ fun main() {
                 window.toFront()
                 window.requestFocus()
             }
-            TonearmTheme { TonearmApp(app, nav) }
+            TonearmTheme { TonearmApp(app, nav, quickOpen) { quickOpen = false } }
         }
     }
     // Background work (Connect's polling, HTTP threads) would otherwise keep the process alive without a window.
