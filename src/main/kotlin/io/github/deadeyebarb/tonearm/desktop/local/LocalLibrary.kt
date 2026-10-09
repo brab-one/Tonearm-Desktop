@@ -63,7 +63,9 @@ data class LocalAlbum(val key: String, val title: String, val artist: String, va
  */
 class LocalLibrary(private val json: Json, private val config: ConfigStore, cacheDir: File) {
     private val indexFile = File(cacheDir, "local-library.json")
-    private val coverDir = File(cacheDir, "local-covers").apply { mkdirs() }
+    private val coverDir = File(cacheDir, "local-art").apply { mkdirs() }
+    /** Where artwork used to be saved once per folder (all its files got the first one's): their tracks are read again. */
+    private val oldCoverDir = File(cacheDir, "local-covers")
     private val _tracks = MutableStateFlow(load())
     val tracks: StateFlow<List<LocalTrack>> = _tracks.asStateFlow()
     private val _scanning = MutableStateFlow(false)
@@ -107,7 +109,7 @@ class LocalLibrary(private val json: Json, private val config: ConfigStore, cach
     }
 
     suspend fun rescan() = lock.withLock {
-        val folders = config.state.value.localFolders.map(::File).filter { it.isDirectory }
+        val folders = outermost(config.state.value.localFolders.map(::File).filter { it.isDirectory })
         if (folders.isEmpty()) {
             if (_tracks.value.isNotEmpty()) save(emptyList())
             return@withLock
@@ -115,11 +117,12 @@ class LocalLibrary(private val json: Json, private val config: ConfigStore, cach
         _scanning.value = true
         try {
             val known = _tracks.value.associateBy { it.path }
+            val oldArt = oldCoverDir.absolutePath + File.separator
             val found = withContext(Dispatchers.IO) {
                 folders.asSequence().flatMap { it.walkTopDown().onEnter { dir -> !dir.name.startsWith(".") } }
                     .filter { it.isFile && it.extension.lowercase() in EXTENSIONS }
                     .map { file ->
-                        known[file.absolutePath]?.takeIf { it.modified == file.lastModified() } ?: read(file)
+                        known[file.absolutePath]?.takeIf { it.modified == file.lastModified() && it.cover?.startsWith(oldArt) != true } ?: read(file)
                     }
                     .filterNotNull()
                     .toList()
@@ -130,9 +133,19 @@ class LocalLibrary(private val json: Json, private val config: ConfigStore, cach
         }
     }
 
+    /** [folders] without the ones inside another (or the same one twice): those are walked with that one. */
+    private fun outermost(folders: List<File>): List<File> {
+        val paths = folders.map { runCatching { it.canonicalFile }.getOrDefault(it.absoluteFile).toPath() }
+        return folders.filterIndexed { i, _ -> paths.indices.none { j -> j != i && paths[i].startsWith(paths[j]) && (paths[i] != paths[j] || j < i) } }
+    }
+
     private fun save(tracks: List<LocalTrack>) {
         _tracks.value = tracks
         runCatching { indexFile.writeText(json.encodeToString(ListSerializer(LocalTrack.serializer()), tracks)) }
+        // Artwork no track shows anymore goes.
+        val shown = tracks.mapNotNullTo(HashSet()) { it.cover }
+        coverDir.listFiles()?.filter { it.absolutePath !in shown }?.forEach { it.delete() }
+        oldCoverDir.deleteRecursively()
     }
 
     private fun read(file: File): LocalTrack? = runCatching {
@@ -163,18 +176,24 @@ class LocalLibrary(private val json: Json, private val config: ConfigStore, cach
         LocalTrack(path = file.absolutePath, modified = file.lastModified(), title = file.nameWithoutExtension, album = file.parentFile?.name, suffix = file.extension.lowercase())
     }
 
-    /** cover.jpg / folder.jpg / front.png… next to the file, else the artwork in its tags (saved once per folder). */
+    /**
+     * cover.jpg / folder.jpg / front.png… next to the file, else the artwork in its own tags, saved under a name
+     * made from the picture: the files of an album share one, and new artwork gets a new one.
+     */
     private fun coverFor(file: File, audio: org.jaudiotagger.audio.AudioFile): String? {
         val dir = file.parentFile ?: return null
         dir.listFiles()?.firstOrNull { f ->
             f.isFile && f.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp") &&
                 f.nameWithoutExtension.lowercase() in setOf("cover", "folder", "front", "album", "albumart", "albumartlarge")
         }?.let { return it.absolutePath }
-        val name = MessageDigest.getInstance("SHA-1").digest(dir.absolutePath.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
+        val art = runCatching { audio.tag?.firstArtwork?.binaryData }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return null
+        val name = MessageDigest.getInstance("SHA-1").digest(art).joinToString("") { "%02x".format(it) }.take(24)
         val cached = File(coverDir, "$name.img")
-        if (cached.exists()) return cached.absolutePath
-        val art = runCatching { audio.tag?.firstArtwork?.binaryData }.getOrNull() ?: return null
-        cached.writeBytes(art)
+        if (!cached.exists()) {
+            val tmp = File(coverDir, "$name.tmp")
+            tmp.writeBytes(art)
+            tmp.renameTo(cached)
+        }
         return cached.absolutePath
     }
 
