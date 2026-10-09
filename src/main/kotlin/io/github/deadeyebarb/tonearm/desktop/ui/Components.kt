@@ -77,6 +77,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
 import io.github.deadeyebarb.tonearm.integrations.Fetch
 import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
@@ -263,7 +264,8 @@ fun <T> LoadContent(loader: Loader<T>, modifier: Modifier = Modifier, keepLast: 
     }
     when (state) {
         Load.Loading -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Hud.colors.accent) }
-        is Load.Failed -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", state.error.userMessage(), modifier) { HudButton("Retry", loader.reload) }
+        // Retry asks the keyring again too, even right after it failed.
+        is Load.Failed -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", state.error.userMessage(), modifier) { HudButton("Retry", { SecretStore.retry(); loader.reload() }) }
         is Load.Ready -> content(state.value)
     }
 }

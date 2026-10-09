@@ -73,6 +73,7 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.WebSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.SearchRank
 import io.github.deadeyebarb.tonearm.integrations.SongMatch
@@ -290,7 +291,7 @@ fun AlbumsScreen(app: DesktopApp, nav: Navigator) {
         ScreenTitle("Albums", "A–Z")
         val failed = error
         when {
-            albums.size <= restored && failed != null -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", failed) { HudButton("Retry", { error = null }) }
+            albums.size <= restored && failed != null -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", failed) { HudButton("Retry", { SecretStore.retry(); error = null }) }
             albums.size <= restored && !done -> {
                 LaunchedEffect(albums.size) { more() }
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Hud.colors.accent) }
@@ -305,7 +306,7 @@ fun AlbumsScreen(app: DesktopApp, nav: Navigator) {
                                 // Not tried again on its own: the page stays put until Retry.
                                 Text(failed, style = MaterialTheme.typography.bodyMedium, color = Hud.colors.danger, modifier = Modifier.weight(1f, fill = false))
                                 Spacer(Modifier.width(12.dp))
-                                HudButton("Retry", { error = null }, filled = false)
+                                HudButton("Retry", { SecretStore.retry(); error = null }, filled = false)
                             } else {
                                 LaunchedEffect(albums.size) { more() }
                                 CircularProgressIndicator(color = Hud.colors.accent)
