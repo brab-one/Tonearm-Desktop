@@ -36,19 +36,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import io.github.deadeyebarb.tonearm.data.ClientCert
 import io.github.deadeyebarb.tonearm.data.ServerConfig
-import io.github.deadeyebarb.tonearm.data.TrustedCa
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
-import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
-import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
-import io.github.deadeyebarb.tonearm.net.Certs
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
@@ -193,10 +186,7 @@ private fun ServerForm(app: DesktopApp, existing: ServerConfig?) {
             test = TestState.Running
             scope.launch {
                 test = try {
-                    val server = withContext(Dispatchers.IO) { buildServer(existing, url.trim(), user.trim(), password, certFile, certPassword, caFile) }
-                    val session = app.sessions.build(server)
-                    app.api.ping(session)
-                    app.config.update { it.copy(server = server) }
+                    val server = app.sessions.testAndSave(existing, url.trim(), user.trim(), password, certFile, certPassword, caFile) { app.api.ping(it) }
                     TestState.Passed("Connected to ${server.baseUrl}" + if (hasCert) " with your client certificate" else "")
                 } catch (e: Exception) {
                     TestState.Failed(e.userMessage())
@@ -204,32 +194,6 @@ private fun ServerForm(app: DesktopApp, existing: ServerConfig?) {
             }
         }, enabled = url.isNotBlank() && user.isNotBlank() && (password.isNotEmpty() || existing != null) && test != TestState.Running)
     }
-}
-
-/** Copies the certificate files next to the config and seals the secrets; keeps what isn't replaced. */
-private fun buildServer(existing: ServerConfig?, url: String, user: String, password: String, cert: File?, certPassword: String, ca: File?): ServerConfig {
-    val clientCert = if (cert != null) {
-        val bytes = cert.readBytes()
-        Certs.loadPkcs12(bytes, certPassword.toCharArray()) // Fails early on a wrong password.
-        AppDirs.writePrivate(File(AppDirs.config, "client.p12"), bytes)
-        ClientCert.Pkcs12File("client.p12", SecretStore.seal("client-certificate-password", certPassword), cert.name)
-    } else {
-        existing?.clientCert
-    }
-    val trusted = if (ca != null) {
-        val bytes = ca.readBytes()
-        Certs.parse(bytes)
-        AppDirs.writePrivate(File(AppDirs.config, "ca.pem"), bytes)
-        TrustedCa("ca.pem", ca.name)
-    } else {
-        existing?.trustedCa
-    }
-    val secret = if (password.isNotEmpty()) SecretStore.seal("server-password", password) else existing?.secretEnc.orEmpty()
-    val name = runCatching { java.net.URI(url).host }.getOrNull() ?: url
-    return ServerConfig(
-        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
-        name = name, baseUrl = url.trimEnd('/'), username = user, secretEnc = secret, clientCert = clientCert, trustedCa = trusted,
-    ).also { DesktopSessions.clientFor(it, okhttp3.OkHttpClient()) }
 }
 
 @Composable

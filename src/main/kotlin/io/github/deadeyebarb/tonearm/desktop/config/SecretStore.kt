@@ -2,6 +2,7 @@ package io.github.deadeyebarb.tonearm.desktop.config
 
 import com.sun.jna.platform.win32.Crypt32Util
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -29,18 +30,48 @@ object SecretStore {
         }
         // The keyring entry keeps its name, so what was read from it before is stale now.
         opened[sealed] = secret
+        failed.remove(sealed)
         changes++
         return sealed
     }
 
-    private val opened = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val opened = ConcurrentHashMap<String, String>()
 
     /** Goes up whenever a secret is replaced, so whatever was built with the old one can be rebuilt. */
     @Volatile var changes = 0
         private set
 
-    /** The secret behind [sealed], or null when the keyring didn't answer: not remembered, so it's asked again next time. */
-    fun read(sealed: String): String? = opened[sealed] ?: unseal(sealed)?.also { opened[sealed] = it }
+    /** Looking a secret up failed [times] in a row: the keyring is left alone [until] then. */
+    private class Failed(val times: Int, val until: Long)
+    private val failed = ConcurrentHashMap<String, Failed>()
+    private val lookups = ConcurrentHashMap<String, Any>()
+
+    /**
+     * The secret behind [sealed], or null when the keyring didn't answer. Each lookup may show an unlock prompt, so
+     * there's one at a time per secret (the others wait for its answer), and after a failure the keyring is left
+     * alone for a minute, then for longer, up to five minutes.
+     */
+    fun read(sealed: String): String? {
+        opened[sealed]?.let { return it }
+        return synchronized(lookups.computeIfAbsent(sealed) { Any() }) {
+            opened[sealed] ?: run {
+                val last = failed[sealed]
+                if (last != null && System.currentTimeMillis() < last.until) return@run null
+                unseal(sealed).also { secret ->
+                    if (secret != null) {
+                        opened[sealed] = secret
+                        failed.remove(sealed)
+                    } else {
+                        val times = (last?.times ?: 0) + 1
+                        failed[sealed] = Failed(times, System.currentTimeMillis() + minOf(60_000L shl minOf(times - 1, 3), 300_000L))
+                    }
+                }
+            }
+        }
+    }
+
+    /** The keyring gets asked again right away, failures or not (the user asked for it). */
+    fun retry() = failed.clear()
 
     /** Like [read], with "" when the keyring didn't answer. */
     fun open(sealed: String): String = read(sealed).orEmpty()
@@ -55,6 +86,7 @@ object SecretStore {
 
     fun forget(sealed: String) {
         opened.remove(sealed)
+        failed.remove(sealed)
         if (sealed.startsWith("keyring:") && !keyringOff) {
             runCatching { run("secret-tool", "clear", "application", "tonearm", "name", sealed.removePrefix("keyring:")) }
         }
@@ -66,13 +98,16 @@ object SecretStore {
         process.waitFor(30, TimeUnit.SECONDS) && process.exitValue() == 0 && lookup(name) == secret
     }.getOrDefault(false)
 
-    /** A few tries: right after login, or while the keyring is being updated, it may not answer yet. */
+    /**
+     * A few tries when the keyring said no at once: right after login, or while it's being updated, it may not
+     * answer yet. One that took its time showed an unlock prompt, dismissed or not answered: asking again would
+     * only show another one.
+     */
     private fun lookup(name: String): String? {
         repeat(3) { attempt ->
-            val result = runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }
-            result.getOrNull()?.let { return it }
-            // One that didn't answer at all (an unlock prompt nobody answers) isn't asked again right away.
-            if (result.exceptionOrNull() is TimeoutException) return null
+            val started = System.nanoTime()
+            runCatching { run("secret-tool", "lookup", "application", "tonearm", "name", name) }.getOrNull()?.let { return it }
+            if (System.nanoTime() - started > 2_000_000_000L) return null
             if (attempt < 2) Thread.sleep(400)
         }
         return null
