@@ -74,7 +74,7 @@ class DesktopPlayer(
      * Gets the song playing, the whole queue and the radio.
      */
     private val onQueueEnd: suspend (current: ConnectSong, queue: List<ConnectSong>, radio: RadioSeed?) -> List<ConnectSong> = { _, _, _ -> emptyList() },
-    /** Every song heard, skipped ones too: when it started and how far it got (for the listening history). */
+    /** Every song heard, skipped ones too: when it started and how long it was heard (for the listening history). */
     private val onPlayed: (song: ConnectSong, startedAt: Long, listenedMs: Long, durationMs: Long) -> Unit = { _, _, _, _ -> },
 ) : Mpv.Listener {
     private val thread = Executors.newSingleThreadExecutor { Thread(it, "player").apply { isDaemon = true } }
@@ -106,10 +106,6 @@ class DesktopPlayer(
     @Volatile private var closed = false
     private val shuttingDown = AtomicBoolean(false)
 
-    /** The song being heard: when it started, from where, and the furthest it got. */
-    private class Heard(val song: ConnectSong, val startedAt: Long, val fromMs: Long) {
-        var reachedMs = fromMs
-    }
     private var heard: Heard? = null
 
     init {
@@ -378,7 +374,7 @@ class DesktopPlayer(
             }
             "time-pos" -> (value as? Double)?.let { seconds ->
                 val ms = (seconds * 1000).toLong()
-                heard?.let { if (ms > it.reachedMs) it.reachedMs = ms }
+                heard?.at(ms, _state.value.playing)
                 // Every frame reports a position; the UI only needs a few updates a second.
                 if (kotlin.math.abs(ms - _state.value.positionMs) >= 200 || ms < _state.value.positionMs) {
                     _state.update { it.copy(positionMs = ms) }
@@ -542,13 +538,12 @@ class DesktopPlayer(
         heard = Heard(song, System.currentTimeMillis(), fromMs)
     }
 
-    /** Hands the song being heard to [onPlayed], once. */
+    /** Hands the song being heard to [onPlayed], once, with the time it was heard. */
     private fun report() {
         val h = heard ?: return
         heard = null
-        val listened = h.reachedMs - h.fromMs
         val duration = (h.song.duration ?: 0) * 1000L
-        if (listened >= 1_000) onPlayed(h.song, h.startedAt, listened, duration)
+        if (h.heardMs >= 1_000) onPlayed(h.song, h.startedAt, h.heardMs, duration)
     }
 
     /** Keeps mpv's second entry in step with what should play next. */
@@ -659,19 +654,19 @@ class DesktopPlayer(
         if (continuedAfter >= from) continuedAfter += by
     }
 
-    /** Scrobbles at half the song or four minutes, like Last.fm, once per play. */
+    /** Scrobbles once the song has been heard long enough ([Heard.scrobbles]), once per play, as of when it started. */
     private fun maybeScrobble() {
         val s = _state.value
         val song = s.current ?: return
-        if (song.source != ConnectSong.SERVER || scrobbledFor == s.index || s.durationMs <= 0) return
-        if (s.positionMs >= minOf(s.durationMs / 2, 240_000L)) {
+        if (song.source != ConnectSong.SERVER || scrobbledFor == s.index) return
+        val h = heard?.takeIf { it.song == song } ?: return
+        if (h.scrobbles(s.durationMs)) {
             scrobbledFor = s.index
-            scrobble(song, submission = true)
+            scrobble(song, submission = true, time = h.startedAt)
         }
     }
 
-    private fun scrobble(song: ConnectSong, submission: Boolean) {
-        val time = System.currentTimeMillis()
+    private fun scrobble(song: ConnectSong, submission: Boolean, time: Long = System.currentTimeMillis()) {
         // Off the player thread: opening the session may wait for the keyring.
         io.launch {
             val session = sessions.current() ?: return@launch

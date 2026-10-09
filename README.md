@@ -72,8 +72,9 @@ submodule).
   Navidrome (or the [plugin](https://github.com/brab-one/Tonearm-Connect) in Lidarr), the phone's
   Devices screen shows this player and controls it (play/pause, skip, seek, volume, shuffle, repeat,
   queue), and playback moves between phone and desktop
-- Scrobbles to the music server (now playing, and at half the song or 4 minutes), and every song it plays
-  (YouTube Music and skips too) goes to the Tonearm server's listening history, which the picks learn from
+- Scrobbles to the music server (now playing, and once you've heard half the song or 4 minutes; seeking ahead
+  doesn't count), and every song it plays (YouTube Music and skips too) goes to the Tonearm server's listening
+  history with how long you heard it, which the picks learn from
 - **Player bar**: click the song to go back to where you started it, the artist for their page, right-click
   for the song's menu
 - Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
