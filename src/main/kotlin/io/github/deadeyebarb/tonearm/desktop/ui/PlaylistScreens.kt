@@ -129,11 +129,11 @@ fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
 }
 
 /**
- * A playlist's menu. Only the owner can change a playlist: someone else's ([mine] false) can be copied instead. The
- * pages showing playlists load them again after a change.
+ * A playlist's menu (on its own page, without Open). Only the owner can change a playlist: someone else's ([mine] false)
+ * can be copied instead. The pages showing playlists load them again after a change.
  */
 private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: String, name: String, mine: Boolean): List<MenuEntry> = buildList {
-    add(MenuEntry("Open") { nav.go(Screen.Playlist(id)) })
+    if (nav.current != Screen.Playlist(id)) add(MenuEntry("Open") { nav.go(Screen.Playlist(id)) })
     if (mine) {
         add(MenuEntry("Rename…") {
             ui.prompt = Prompt("Rename playlist", "Name", name, "Rename") { new ->
