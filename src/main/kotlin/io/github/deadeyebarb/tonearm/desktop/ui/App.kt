@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -429,12 +430,18 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
             }
             SeekBar(state, Modifier.widthIn(max = 516.dp).fillMaxWidth()) { app.player.seek(it) }
         }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        // Short of room (a small window, the queue open), a radio's chip is just its ∞, and the volume slider narrower
+        // or gone (the wheel still turns it).
+        BoxWithConstraints(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+        val roomy = maxWidth >= 330.dp
+        val slider = maxWidth >= 200.dp
+        Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             // With the queue open, its header has it.
             if (!queueOpen) {
                 state.radio?.let { radio ->
-                    RadioChip(radio.title, onStop = { app.player.setRadio(null) }, onClick = onQueue)
-                    Spacer(Modifier.width(12.dp))
+                    val stop = { app.player.setRadio(null) }
+                    if (roomy) RadioChip("∞ " + radio.title.uppercase(), stop, onClick = onQueue) else Tip(radio.title) { RadioChip("∞", stop, onClick = onQueue) }
+                    Spacer(Modifier.width(if (roomy) 12.dp else 8.dp))
                 }
             }
             var dragging by remember { mutableStateOf<Float?>(null) }
@@ -443,20 +450,21 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                 val notches = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                 if (notches != 0f) app.player.setVolume((state.volume - notches * 5).roundToInt().coerceIn(0, 100))
             }
-            // Narrower when the bar is short of room (a radio's chip, a small window).
             Tip("Volume ${state.volume}%", wheel.weight(1f, fill = false)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
-                    Slider(
-                        value = dragging ?: (state.volume / 100f),
-                        onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
-                        onValueChangeFinished = { dragging = null },
-                        colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-                        modifier = Modifier.widthIn(max = 140.dp),
-                    )
+                    if (slider) {
+                        Slider(
+                            value = dragging ?: (state.volume / 100f),
+                            onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
+                            onValueChangeFinished = { dragging = null },
+                            colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
+                            modifier = Modifier.widthIn(max = 140.dp),
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(8.dp))
+            if (slider) Spacer(Modifier.width(8.dp))
             if (mini != null) {
                 Tip(if (mini.open) "Close the mini player" else "Mini player") {
                     IconButton(onClick = mini::toggle) { Icon(Icons.Rounded.PictureInPictureAlt, "Mini player", tint = if (mini.open) hud.accent else hud.dim) }
@@ -466,12 +474,13 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                 IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
             }
         }
+        }
     }
 }
 
-/** A radio plays: ✕ ends it (the queue stays and plays to its end). In the player bar a click shows the queue. */
+/** A radio plays ([label]): ✕ ends it (the queue stays and plays to its end). In the player bar a click shows the queue. */
 @Composable
-private fun RadioChip(title: String, onStop: () -> Unit, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+private fun RadioChip(label: String, onStop: () -> Unit, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     val hud = Hud.colors
     val shape = MaterialTheme.shapes.extraSmall
     Row(
@@ -479,7 +488,7 @@ private fun RadioChip(title: String, onStop: () -> Unit, modifier: Modifier = Mo
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(start = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("∞ " + title.uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1)
         Tip("Stop the radio") {
             IconButton(onClick = onStop, modifier = Modifier.size(24.dp)) {
                 Icon(Icons.Rounded.Close, "Stop the radio", tint = hud.accent2, modifier = Modifier.size(14.dp))
@@ -555,7 +564,7 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
                     "${count(state.queue.size, "SONG", "SONGS")} // ${formatDuration(state.queue.sumOf { it.duration ?: 0 }.toLong())}",
                     style = MaterialTheme.typography.labelSmall, color = hud.dim,
                 )
-                state.radio?.let { RadioChip(it.title, onStop = { app.player.setRadio(null) }, Modifier.padding(top = 6.dp)) }
+                state.radio?.let { RadioChip("∞ " + it.title.uppercase(), onStop = { app.player.setRadio(null) }, Modifier.padding(top = 6.dp)) }
             }
             val ui = LocalUi.current
             Tip("Save as a playlist") {
