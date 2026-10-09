@@ -596,7 +596,7 @@ class DesktopPlayer(
         val time = System.currentTimeMillis()
         // Off the player thread: opening the session may wait for the keyring.
         io.launch {
-            val session = sessions.currentOrNull() ?: return@launch
+            val session = sessions.current() ?: return@launch
             runCatching { api.scrobble(session, song.id, time, submission) }
         }
     }

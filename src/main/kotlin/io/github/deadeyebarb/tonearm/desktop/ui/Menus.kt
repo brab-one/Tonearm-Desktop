@@ -27,12 +27,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,16 +44,28 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import kotlinx.coroutines.launch
 
-/** An entry of a right-click menu (and the matching "⋯" menu). */
-data class MenuEntry(val label: String, val action: () -> Unit)
+/** An entry of a right-click menu (and the matching "⋯" menu); a [danger] one deletes something, and comes last. */
+data class MenuEntry(val label: String, val danger: Boolean = false, val action: () -> Unit)
 
 /** Dialogs any screen can open. */
 class UiState {
@@ -72,7 +86,7 @@ val LocalNav = staticCompositionLocalOf<Navigator> { error("Navigator not provid
 /** Right-click on [content] shows [entries]. */
 @Composable
 fun MenuArea(entries: () -> List<MenuEntry>, content: @Composable () -> Unit) =
-    ContextMenuArea(items = { entries().map { ContextMenuItem(it.label, it.action) } }, content = content)
+    ContextMenuArea(items = { entries().sortedBy { it.danger }.map { ContextMenuItem(it.label, it.action) } }, content = content)
 
 /** The same entries behind a "⋯" button, for those who don't right-click. */
 @Composable
@@ -89,8 +103,8 @@ fun MoreButton(entries: () -> List<MenuEntry>, open: Boolean, onOpenChange: (Boo
             Icon(Icons.Rounded.MoreHoriz, "More", tint = if (open) Hud.colors.accent else Hud.colors.dim, modifier = Modifier.size(18.dp))
         }
         DropdownMenu(open, { onOpenChange(false) }, modifier = Modifier.background(Hud.colors.panelHigh)) {
-            for (entry in entries()) {
-                DropdownMenuItem(text = { Text(entry.label, style = MaterialTheme.typography.bodyMedium) }, onClick = {
+            for (entry in entries().sortedBy { it.danger }) {
+                DropdownMenuItem(text = { Text(entry.label, style = MaterialTheme.typography.bodyMedium, color = if (entry.danger) Hud.colors.danger else Color.Unspecified) }, onClick = {
                     onOpenChange(false)
                     entry.action()
                 })
@@ -103,11 +117,13 @@ fun MoreButton(entries: () -> List<MenuEntry>, open: Boolean, onOpenChange: (Boo
 fun LikeButton(app: DesktopApp, song: ConnectSong, size: Dp = 36.dp) {
     val liked by app.likes.liked.collectAsState()
     val on = io.github.deadeyebarb.tonearm.desktop.DesktopLikes.key(song.source, song.id) in liked
-    IconButton(onClick = { app.like(song, !on) }, modifier = Modifier.size(size)) {
-        Icon(
-            if (on) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (on) "Unlike" else "Like",
-            tint = if (on) Hud.colors.accent2 else Hud.colors.dim, modifier = Modifier.size(size * 0.55f),
-        )
+    Tip(if (on) "Unlike" else "Like") {
+        IconButton(onClick = { app.like(song, !on) }, modifier = Modifier.size(size)) {
+            Icon(
+                if (on) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (on) "Unlike" else "Like",
+                tint = if (on) Hud.colors.accent2 else Hud.colors.dim, modifier = Modifier.size(size * 0.55f),
+            )
+        }
     }
 }
 
@@ -137,11 +153,13 @@ fun DesktopApp.dislike(song: ConnectSong, on: Boolean) {
 fun DislikeButton(app: DesktopApp, song: ConnectSong, size: Dp = 36.dp) {
     val disliked by app.dislikes.state.collectAsState()
     val on = remember(disliked, song) { app.dislikes.isDisliked(song.artist, song.title) }
-    IconButton(onClick = { app.dislike(song, !on) }, modifier = Modifier.size(size)) {
-        Icon(
-            if (on) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown, if (on) "Remove dislike" else "Dislike",
-            tint = if (on) Hud.colors.danger else Hud.colors.dim, modifier = Modifier.size(size * 0.5f),
-        )
+    Tip(if (on) "Remove dislike" else "Dislike: skipped, and out of mixes and picks") {
+        IconButton(onClick = { app.dislike(song, !on) }, modifier = Modifier.size(size)) {
+            Icon(
+                if (on) Icons.Rounded.ThumbDown else Icons.Outlined.ThumbDown, if (on) "Remove dislike" else "Dislike",
+                tint = if (on) Hud.colors.danger else Hud.colors.dim, modifier = Modifier.size(size * 0.5f),
+            )
+        }
     }
 }
 
@@ -233,9 +251,10 @@ fun songMenu(app: DesktopApp, nav: Navigator, ui: UiState, song: ConnectSong, ex
     })
     when (song.source) {
         ConnectSong.SERVER -> {
-            song.albumId?.let { add(MenuEntry("Go to album") { nav.go(Screen.Album(it)) }) }
+            // Not on the album's own page.
+            song.albumId?.takeIf { nav.current != Screen.Album(it) }?.let { add(MenuEntry("Go to album") { nav.go(Screen.Album(it)) }) }
             song.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
-            if (app.canRemoveMusic) add(MenuEntry("Delete from server…") { app.deleteSongFromServer(ui, song) })
+            if (app.canRemoveMusic) add(MenuEntry("Delete from server…", danger = true) { app.deleteSongFromServer(ui, song) })
         }
         ConnectSong.YOUTUBE -> song.artist?.let { artist ->
             if (config.youtubeCatalog) add(MenuEntry("$artist on YouTube Music") { app.openYouTubeArtist(nav, artist) })
@@ -310,9 +329,18 @@ private fun ConfirmDialog(confirm: Confirm, onDismiss: () -> Unit) {
     )
 }
 
+/** Asks for a name: typing goes straight into the field (what's there is selected), Enter confirms. */
 @Composable
 private fun PromptDialog(prompt: Prompt, onDismiss: () -> Unit) {
-    var text by remember(prompt) { mutableStateOf(prompt.initial) }
+    var text by remember(prompt) { mutableStateOf(TextFieldValue(prompt.initial, TextRange(0, prompt.initial.length))) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(prompt) { focus.requestFocus() }
+    val ready = text.text.isNotBlank()
+    fun confirm() {
+        if (!ready) return
+        onDismiss()
+        prompt.onConfirm(text.text.trim())
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Hud.colors.panel,
@@ -321,14 +349,24 @@ private fun PromptDialog(prompt: Prompt, onDismiss: () -> Unit) {
             OutlinedTextField(
                 text, { text = it }, label = { Text(prompt.label) }, singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Hud.colors.accent, unfocusedBorderColor = Hud.colors.line),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).onEnter(::confirm),
             )
         },
         confirmButton = {
-            TextButton(onClick = { onDismiss(); prompt.onConfirm(text.trim()) }, enabled = text.isNotBlank()) { Text(prompt.confirm.uppercase(), color = Hud.colors.accent) }
+            TextButton(onClick = ::confirm, enabled = ready) { Text(prompt.confirm.uppercase(), color = if (ready) Hud.colors.accent else Hud.colors.dim) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL", color = Hud.colors.dim) } },
     )
+}
+
+/** Enter (on the keyboard or the number pad) runs [action]. */
+fun Modifier.onEnter(action: () -> Unit) = onPreviewKeyEvent {
+    if (it.type == KeyEventType.KeyDown && (it.key == Key.Enter || it.key == Key.NumPadEnter)) {
+        action()
+        true
+    } else {
+        false
+    }
 }
 
 @Composable
@@ -336,9 +374,27 @@ private fun AddToPlaylistDialog(app: DesktopApp, songs: List<ConnectSong>, onDis
     val hud = Hud.colors
     val loader = rememberLoad(songs) { app.api.playlists() }
     var newName by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     fun done(text: String) {
         onDismiss()
         app.message(text)
+    }
+    // One at a time: a double-click would add the songs twice, or make two playlists. The dialog stays until it's
+    // done, so a failure shows while it's still open.
+    fun run(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        app.scope.launch {
+            try {
+                app.attempt(block)
+            } finally {
+                busy = false
+            }
+        }
+    }
+    fun create() {
+        val name = newName.trim()
+        if (name.isNotEmpty()) run { app.playlists.create(name, songs); done("Created “$name”") }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -350,30 +406,33 @@ private fun AddToPlaylistDialog(app: DesktopApp, songs: List<ConnectSong>, onDis
                     OutlinedTextField(
                         newName, { newName = it }, label = { Text("New playlist") }, singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = hud.accent, unfocusedBorderColor = hud.line),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).onEnter(::create),
                     )
                     Spacer(Modifier.width(10.dp))
-                    HudButton("Create", {
-                        val name = newName.trim()
-                        app.scope.launch { app.attempt { app.playlists.create(name, songs); done("Created “$name”") } }
-                    }, enabled = newName.isNotBlank(), icon = Icons.AutoMirrored.Rounded.PlaylistAdd)
+                    HudButton("Create", ::create, enabled = newName.isNotBlank() && !busy, icon = Icons.AutoMirrored.Rounded.PlaylistAdd)
                 }
                 Spacer(Modifier.width(8.dp))
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp), color = hud.accent, trackColor = hud.line)
                 when (val state = loader.state) {
-                    is Load.Ready -> LazyColumn(Modifier.heightIn(max = 360.dp).padding(top = 12.dp)) {
-                        items(state.value.filter { io.github.deadeyebarb.tonearm.weekly.WeeklyPicks.parse(it) == null }, key = { it.id }) { playlist ->
-                            Row(
-                                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable {
-                                    app.scope.launch { app.attempt { app.playlists.add(playlist.id, songs); done("Added to “${playlist.name}”") } }
-                                }.padding(horizontal = 8.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(playlist.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                                Text("${playlist.songCount} songs", style = MaterialTheme.typography.labelSmall, color = hud.dim)
+                    is Load.Ready -> {
+                        // Only your own: the server lists other people's public playlists too, which only they can change.
+                        val mine = state.value.filter { WeeklyPicks.parse(it) == null && app.owns(it) }
+                        if (mine.isEmpty()) Text("No playlists of yours yet: make one above.", style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(top = 12.dp))
+                        LazyColumn(Modifier.heightIn(max = 360.dp).padding(top = 12.dp)) {
+                            items(mine, key = { it.id }) { playlist ->
+                                Row(
+                                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(enabled = !busy) {
+                                        run { app.playlists.add(playlist.id, songs); done("Added to “${playlist.name}”") }
+                                    }.padding(horizontal = 8.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(playlist.name, style = MaterialTheme.typography.titleSmall, color = if (busy) hud.dim else hud.text, modifier = Modifier.weight(1f))
+                                    Text(count(playlist.songCount, "song", "songs"), style = MaterialTheme.typography.labelSmall, color = hud.dim)
+                                }
                             }
                         }
                     }
-                    is Load.Failed -> Text(state.error.message.orEmpty(), color = hud.danger)
+                    is Load.Failed -> Text(state.error.userMessage(), color = hud.danger)
                     Load.Loading -> Text("Loading playlists…", color = hud.dim)
                 }
                 if (songs.any { it.source == ConnectSong.YOUTUBE }) {

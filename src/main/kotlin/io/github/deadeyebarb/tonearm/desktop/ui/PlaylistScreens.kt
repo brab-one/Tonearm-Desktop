@@ -3,7 +3,9 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,7 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -36,15 +40,17 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
@@ -53,10 +59,12 @@ import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.desktop.PlaylistItem
 import io.github.deadeyebarb.tonearm.integrations.ImportedPlaylist
 import io.github.deadeyebarb.tonearm.integrations.PlaylistSources
+import io.github.deadeyebarb.tonearm.subsonic.Playlist
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.weekly.WeeklyBatch
 import io.github.deadeyebarb.tonearm.weekly.WeeklyPicks
 import io.github.deadeyebarb.tonearm.weekly.WeeklyState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,17 +77,17 @@ private val padding = PaddingValues(start = 28.dp, end = 28.dp, bottom = 24.dp)
 @Composable
 fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
     val ui = LocalUi.current
-    var refresh by remember { mutableIntStateOf(0) }
     var importing by remember { mutableStateOf(false) }
     val pending by app.playlists.pending.collectAsState()
-    val loader = rememberLoad(app.config.state.value.server?.baseUrl, refresh) { app.api.playlists() }
-    if (importing) ImportDialog(app, onDone = { playlistId -> importing = false; refresh++; playlistId?.let { nav.go(Screen.Playlist(it)) } })
+    // Changes reload it in place, without a spinner or losing the scroll.
+    val loader = rememberLoad(app.config.state.value.server?.baseUrl) { app.api.playlists() }
+    if (importing) ImportDialog(app, onDone = { playlistId -> importing = false; loader.reload(); playlistId?.let { nav.go(Screen.Playlist(it)) } })
     Column(Modifier.fillMaxSize()) {
-        ScreenTitle("Playlists", (loader.state as? Load.Ready)?.value?.let { "${it.size} PLAYLISTS" }) {
+        ScreenTitle("Playlists", (loader.state as? Load.Ready)?.value?.let { count(it.size, "PLAYLIST", "PLAYLISTS") }) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 HudButton("New playlist", {
                     ui.prompt = Prompt("New playlist", "Name", "", "Create") { name ->
-                        app.scope.launch { app.attempt { val p = app.playlists.create(name); refresh++; nav.go(Screen.Playlist(p.id)) } }
+                        app.scope.launch { app.attempt { val p = app.playlists.create(name); loader.reload(); nav.go(Screen.Playlist(p.id)) } }
                     }
                 }, icon = Icons.AutoMirrored.Rounded.PlaylistAdd)
                 HudButton("Import", { importing = true }, icon = Icons.Rounded.Download, filled = false)
@@ -92,43 +100,68 @@ fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
                     "Make one here, import one from YouTube Music or Spotify, or add songs from any song's menu (right-click).",
                 )
             } else {
-                LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = padding) {
-                    items(playlists, key = { it.id }) { p ->
-                        val waiting = pending[p.id].orEmpty().size
-                        val weekly = WeeklyPicks.parse(p)
-                        MenuArea({ playlistMenu(app, nav, ui, p.id, p.name) { refresh++ } }) {
-                            CardItem(
-                                app, p.coverArt, p.name,
-                                listOfNotNull(
-                                    "${p.songCount} songs",
-                                    waiting.takeIf { it > 0 }?.let { "$it to come" },
-                                    weekly?.let { "weekly picks" },
-                                ).joinToString(" · "),
-                                { nav.go(Screen.Playlist(p.id)) },
-                            )
+                val grid = rememberLazyGridState()
+                Box(Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), state = grid, contentPadding = padding) {
+                        items(playlists, key = { it.id }) { p ->
+                            val waiting = pending[p.id].orEmpty().size
+                            val weekly = WeeklyPicks.parse(p)
+                            MenuArea({ playlistMenu(app, nav, ui, p.id, p.name, app.owns(p)) { loader.reload() } }) {
+                                CardItem(
+                                    app, p.coverArt, p.name,
+                                    listOfNotNull(
+                                        count(p.songCount, "song", "songs"),
+                                        waiting.takeIf { it > 0 }?.let { "$it to come" },
+                                        weekly?.let { "weekly picks" },
+                                        p.owner?.takeUnless { app.owns(p) }?.let { "by $it" },
+                                    ).joinToString(" · "),
+                                    { nav.go(Screen.Playlist(p.id)) },
+                                )
+                            }
                         }
                     }
+                    GridScrollbar(grid)
                 }
             }
         }
     }
 }
 
-private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: String, name: String, changed: () -> Unit): List<MenuEntry> = listOf(
-    MenuEntry("Open") { nav.go(Screen.Playlist(id)) },
-    MenuEntry("Rename…") {
-        ui.prompt = Prompt("Rename playlist", "Name", name, "Rename") { new ->
-            app.scope.launch { app.attempt { app.playlists.rename(id, new); changed() } }
-        }
-    },
-    MenuEntry("More like this") { app.scope.launch { app.attempt { moreLikePlaylist(app, nav, id, name) } } },
-    MenuEntry("Delete") {
-        ui.prompt = Prompt("Delete “$name”?", "Type the name to confirm", "", "Delete") { typed ->
-            if (typed == name) app.scope.launch { app.attempt { app.playlists.delete(id); changed(); if (nav.current == Screen.Playlist(id)) nav.back() } }
-            else app.message("The name didn't match; nothing deleted")
-        }
-    },
-)
+/** A playlist's menu. Only the owner can change a playlist: someone else's ([mine] false) can be copied instead. */
+private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: String, name: String, mine: Boolean, changed: () -> Unit): List<MenuEntry> = buildList {
+    add(MenuEntry("Open") { nav.go(Screen.Playlist(id)) })
+    if (mine) {
+        add(MenuEntry("Rename…") {
+            ui.prompt = Prompt("Rename playlist", "Name", name, "Rename") { new ->
+                app.scope.launch { app.attempt { app.playlists.rename(id, new); changed() } }
+            }
+        })
+    } else {
+        add(MenuEntry("Copy to my playlists") {
+            app.scope.launch {
+                app.attempt {
+                    val copy = app.playlists.create(name, app.api.playlist(id).entry.map { it.toConnectSong() })
+                    app.message("Copied as “$name”")
+                    changed()
+                    nav.go(Screen.Playlist(copy.id))
+                }
+            }
+        })
+    }
+    add(MenuEntry("More like this") { app.scope.launch { app.attempt { moreLikePlaylist(app, nav, id, name) } } })
+    if (mine) {
+        add(MenuEntry("Delete", danger = true) {
+            ui.confirm = Confirm("Delete “$name”?", "The playlist goes from your server; the songs in it stay in your library. This can't be undone.", "Delete") {
+                app.scope.launch { app.attempt { app.playlists.delete(id); changed(); if (nav.current == Screen.Playlist(id)) nav.back() } }
+            }
+        })
+    }
+}
+
+/** Whether [playlist] is the user's own. Only its owner can change it; one whose server doesn't say counts as theirs. */
+fun DesktopApp.owns(playlist: Playlist): Boolean = ownsPlaylist(playlist.owner, config.state.value.server?.username)
+
+internal fun ownsPlaylist(owner: String?, user: String?): Boolean = owner == null || owner.equals(user, ignoreCase = true)
 
 /** "More like this" for a playlist: its most frequent artist and a song of theirs, and the whole mix described to the AI. */
 private suspend fun moreLikePlaylist(app: DesktopApp, nav: Navigator, id: String, name: String) {
@@ -144,10 +177,11 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
     val hud = Hud.colors
     val ui = LocalUi.current
     val scope = rememberCoroutineScope()
-    var refresh by remember { mutableIntStateOf(0) }
     val pendingMap by app.playlists.pending.collectAsState()
     val state by app.player.state.collectAsState()
-    val loader = rememberLoad(id, refresh) {
+    // Edits reload it in place: the list stays where it was scrolled to, without a spinner.
+    val list = rememberLazyListState()
+    val loader = rememberLoad(id) {
         // Pick up songs that have arrived since.
         runCatching { app.playlists.resolve() }
         app.api.playlist(id)
@@ -156,6 +190,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
         val items = remember(playlist, pendingMap) { app.playlists.merged(playlist, pendingMap[id].orEmpty()) }
         val waiting = items.count { it is PlaylistItem.Pending }
         val weekly = WeeklyPicks.parse(playlist)
+        val mine = app.owns(playlist)
         fun playFrom(index: Int, shuffle: Boolean = false) {
             scope.launch {
                 app.attempt {
@@ -171,7 +206,8 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                 }
             }
         }
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+        Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = padding) {
             item {
                 Row(Modifier.padding(vertical = 16.dp), verticalAlignment = Alignment.Bottom) {
                     Cover(app, playlist.coverArt, Modifier.size(200.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.medium), size = 600, shape = MaterialTheme.shapes.medium)
@@ -180,12 +216,15 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         Text(if (weekly != null) "WEEKLY PICKS" else "PLAYLIST", style = MaterialTheme.typography.labelMedium, color = hud.accent)
                         Text(playlist.name, style = MaterialTheme.typography.headlineLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(
-                            listOfNotNull("${playlist.entry.size} songs", waiting.takeIf { it > 0 }?.let { "$it not downloaded yet" }, formatDuration(playlist.duration.toLong()))
+                            listOfNotNull(
+                                count(playlist.entry.size, "song", "songs"), waiting.takeIf { it > 0 }?.let { "$it not downloaded yet" },
+                                formatDuration(playlist.duration.toLong()), playlist.owner?.takeUnless { mine }?.let { "by $it" },
+                            )
                                 .joinToString(" // ").uppercase(),
                             style = MaterialTheme.typography.labelMedium, color = hud.dim,
                         )
                         Spacer(Modifier.height(14.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             HudButton("Play", { playFrom(0) }, icon = Icons.Rounded.PlayArrow, enabled = items.isNotEmpty())
                             HudButton("Shuffle", { playFrom(0, shuffle = true) }, icon = Icons.Rounded.Shuffle, filled = false, enabled = items.isNotEmpty())
                             if (weekly != null) {
@@ -196,7 +235,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                                 val session = app.sessions.current() ?: return@attempt
                                                 app.weekly.keep(session, WeeklyBatch(playlist, weekly), name)
                                                 app.message("Kept as “$name”, music included")
-                                                refresh++
+                                                loader.reload()
                                             }
                                         }
                                     }
@@ -214,7 +253,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                 }, icon = Icons.Rounded.CloudDownload, filled = false)
                             }
                             HudButton("More like this", { scope.launch { app.attempt { moreLikePlaylist(app, nav, id, playlist.name) } } }, icon = Icons.Rounded.AutoAwesome, filled = false)
-                            MoreButton({ playlistMenu(app, nav, ui, id, playlist.name) { refresh++ } }, 40.dp)
+                            MoreButton({ playlistMenu(app, nav, ui, id, playlist.name, mine) { loader.reload() } }, 40.dp)
                         }
                     }
                 }
@@ -229,6 +268,10 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         "Songs marked “Not downloaded” play from YouTube Music and join the playlist on your server once they're in your library.",
                         style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(bottom = 8.dp),
                     )
+                    items.isEmpty() && mine -> Text(
+                        "Nothing in it yet. Right-click a song or an album → Add to playlist…, or use the button on an album's page.",
+                        style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(vertical = 8.dp),
+                    )
                 }
             }
             itemsIndexed(items, key = { i, item -> "$i:" + if (item is PlaylistItem.Entry) item.song.id else (item as PlaylistItem.Pending).track.ref.title }) { i, item ->
@@ -238,10 +281,11 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                         SongRow(
                             app, song, number = i + 1, playing = state.current?.let { it.id == song.id && it.source == song.source } == true,
                             onPlay = { playFrom(i) },
-                            extraMenu = listOf(
-                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1); refresh++ } } },
-                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1); refresh++ } } },
-                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index); refresh++ } } },
+                            // Someone else's playlist can't be changed.
+                            extraMenu = if (!mine) emptyList() else listOf(
+                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1); loader.reload() } } },
+                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1); loader.reload() } } },
+                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index); loader.reload() } } },
                             ),
                         )
                     }
@@ -266,6 +310,8 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                 }
             }
         }
+        ListScrollbar(list)
+        }
     }
 }
 
@@ -281,6 +327,8 @@ private fun ImportDialog(app: DesktopApp, onDone: (String?) -> Unit) {
     var request by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
 
     fun loaded(list: List<ImportedPlaylist>) {
         choices = list
@@ -300,24 +348,28 @@ private fun ImportDialog(app: DesktopApp, onDone: (String?) -> Unit) {
                         "Playlist1.json from Spotify's “Download your data”. Spotify links bring the first 100 songs.",
                     style = MaterialTheme.typography.bodySmall, color = hud.dim,
                 )
+                fun read() {
+                    if (url.isBlank() || busy != null) return
+                    busy = "Reading the playlist…"
+                    error = null
+                    scope.launch {
+                        try {
+                            loaded(listOf(app.sources.fromUrl(url)))
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = e.userMessage()
+                        }
+                        busy = null
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
                     OutlinedTextField(
-                        url, { url = it }, label = { Text("Playlist link") }, singleLine = true, modifier = Modifier.weight(1f),
+                        url, { url = it }, label = { Text("Playlist link") }, singleLine = true, modifier = Modifier.weight(1f).focusRequester(focus).onEnter(::read),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = hud.accent, unfocusedBorderColor = hud.line),
                     )
                     Spacer(Modifier.width(8.dp))
-                    HudButton("Read", {
-                        busy = "Reading the playlist…"
-                        error = null
-                        scope.launch {
-                            try {
-                                loaded(listOf(app.sources.fromUrl(url)))
-                            } catch (e: Exception) {
-                                error = e.userMessage()
-                            }
-                            busy = null
-                        }
-                    }, enabled = url.isNotBlank() && busy == null)
+                    HudButton("Read", ::read, enabled = url.isNotBlank() && busy == null)
                 }
                 HudButton("Open a file…", {
                     val file = pickImportFile() ?: return@HudButton
@@ -393,7 +445,7 @@ private fun ImportDialog(app: DesktopApp, onDone: (String?) -> Unit) {
                         error = e.userMessage()
                     }
                 }
-            }, enabled = source != null && busy == null) { Text("IMPORT", color = hud.accent) }
+            }, enabled = source != null && busy == null) { Text("IMPORT", color = if (source != null && busy == null) hud.accent else hud.dim) }
         },
         dismissButton = { TextButton(onClick = { onDone(null) }, enabled = busy == null) { Text("CANCEL", color = hud.dim) } },
     )

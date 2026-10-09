@@ -3,7 +3,9 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,11 +20,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -31,6 +39,8 @@ import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -50,6 +60,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.AiSearch
@@ -62,6 +78,7 @@ import io.github.deadeyebarb.tonearm.integrations.SearchRank
 import io.github.deadeyebarb.tonearm.integrations.SongMatch
 import io.github.deadeyebarb.tonearm.subsonic.Album
 import io.github.deadeyebarb.tonearm.subsonic.AlbumListType
+import io.github.deadeyebarb.tonearm.subsonic.Artist
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
@@ -81,10 +98,12 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
     val config by app.config.state.collectAsState()
     val rows = listOf(AlbumListType.NEWEST, AlbumListType.RECENT, AlbumListType.FREQUENT, AlbumListType.RANDOM)
     val loader = rememberLoad(config.server?.baseUrl) {
-        coroutineScope { rows.map { type -> async { type to runCatching { app.api.albumList(type, 24) }.getOrDefault(emptyList()) } }.awaitAll() }
+        homeRows(coroutineScope { rows.map { type -> async { type to runCatching { app.api.albumList(type, 24) } } }.awaitAll() })
     }
     LoadContent(loader) { lists ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+        val list = rememberLazyListState()
+        Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = contentPadding) {
             item {
                 Column(Modifier.padding(top = 24.dp)) {
                     Text("WELCOME BACK", style = MaterialTheme.typography.labelMedium, color = Hud.colors.accent)
@@ -108,7 +127,19 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
             }
             item(key = "ai-picks") { AiPicksSection(app, nav) }
         }
+        ListScrollbar(list)
+        }
     }
+}
+
+/**
+ * Home's rows from what each list gave: one that failed is left out, but when all of them failed the server is out
+ * of reach (or turned the login down), and the screen says so instead of showing an empty page.
+ */
+internal fun <K, V> homeRows(results: List<Pair<K, Result<List<V>>>>): List<Pair<K, List<V>>> {
+    results.firstNotNullOfOrNull { it.second.exceptionOrNull() as? CancellationException }?.let { throw it }
+    if (results.isNotEmpty() && results.all { it.second.isFailure }) throw results.first().second.exceptionOrNull()!!
+    return results.map { (key, result) -> key to result.getOrDefault(emptyList()) }
 }
 
 /** "More like this" for an album: its artist's similar artists, and the album described to the AI. */
@@ -137,7 +168,7 @@ private fun albumMenu(app: DesktopApp, nav: Navigator, ui: UiState, album: Album
     add(MenuEntry("More like this") { nav.go(Screen.MoreLike(albumLike(album))) })
     album.artistId?.let { add(MenuEntry("Go to artist") { nav.go(Screen.Artist(it)) }) }
     if (app.canRemoveMusic && album.artistLabel.isNotEmpty()) {
-        add(MenuEntry("Remove from server…") { app.removeFromServer(ui, album.artistLabel, album.name, album.year, { it.albumId == album.id }) { if (nav.current == Screen.Album(album.id)) nav.back() } })
+        add(MenuEntry("Remove from server…", danger = true) { app.removeFromServer(ui, album.artistLabel, album.name, album.year, { it.albumId == album.id }) { if (nav.current == Screen.Album(album.id)) nav.back() } })
     }
 }
 
@@ -148,14 +179,33 @@ fun ArtistsScreen(app: DesktopApp, nav: Navigator) {
     LoadContent(loader) { artists ->
         val shown = if (filter.isBlank()) artists else artists.filter { Names.normalize(it.name).contains(Names.normalize(filter)) }
         Column(Modifier.fillMaxSize()) {
-            ScreenTitle("Artists", "${artists.size} ARTISTS") { FilterField(filter) { filter = it } }
-            LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = contentPadding) {
-                items(shown, key = { it.id }) { artist ->
-                    CardItem(app, artist.coverArt, artist.name, if (artist.albumCount == 1) "1 album" else "${artist.albumCount} albums", { nav.go(Screen.Artist(artist.id)) }, round = true)
+            ScreenTitle("Artists", count(artists.size, "ARTIST", "ARTISTS")) { FilterField(filter) { filter = it } }
+            val ui = LocalUi.current
+            val grid = rememberLazyGridState()
+            Box(Modifier.fillMaxSize()) {
+                LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), state = grid, contentPadding = contentPadding) {
+                    items(shown, key = { it.id }) { artist ->
+                        MenuArea({ artistMenu(app, nav, ui, artist) }) {
+                            CardItem(app, artist.coverArt, artist.name, count(artist.albumCount, "album", "albums"), { nav.go(Screen.Artist(artist.id)) }, round = true)
+                        }
+                    }
                 }
+                GridScrollbar(grid)
             }
         }
     }
+}
+
+/** What an artist card's menu offers: their music, others like them, and removing them. */
+private fun artistMenu(app: DesktopApp, nav: Navigator, ui: UiState, artist: Artist): List<MenuEntry> = buildList {
+    fun songs(block: suspend (List<ConnectSong>) -> Unit) =
+        app.scope.launch { app.attempt { block(songsOf(app, app.api.artist(artist.id).album.sortedByDescending { it.year ?: 0 })) } }
+    add(MenuEntry("Play") { songs { app.player.play(it) } })
+    add(MenuEntry("Shuffle") { songs { app.player.play(it.shuffled()) } })
+    add(MenuEntry("Add to queue") { songs { app.player.enqueue(it); app.message("Added ${count(it.size, "song", "songs")} to the queue") } })
+    add(MenuEntry("More like this") { nav.go(Screen.MoreLike(MoreLikeSeed(artist.name, artist.name, artistId = artist.id, aiSeed = "the artist ${artist.name}", cover = artist.coverArt))) })
+    if (app.config.state.value.youtubeCatalog) add(MenuEntry("${artist.name} on YouTube Music") { app.openYouTubeArtist(nav, artist.name) })
+    if (app.canRemoveMusic) add(MenuEntry("Remove from server…", danger = true) { app.removeFromServer(ui, artist.name, null, null, { it.artistId == artist.id }) })
 }
 
 @Composable
@@ -167,7 +217,9 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
     val loader = rememberLoad(id) { app.api.artist(id) }
     LoadContent(loader) { artist ->
         val albums = artist.album.sortedByDescending { it.year ?: 0 }
-        LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = contentPadding) {
+        val grid = rememberLazyGridState()
+        Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), state = grid, contentPadding = contentPadding) {
             fullWidth {
                 Row(Modifier.padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Cover(app, artist.coverArt, Modifier.size(140.dp), shape = androidx.compose.foundation.shape.CircleShape)
@@ -175,9 +227,9 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                     Column {
                         Text("ARTIST", style = MaterialTheme.typography.labelMedium, color = Hud.colors.accent)
                         Text(artist.name, style = MaterialTheme.typography.headlineLarge)
-                        Text("${albums.size} ALBUMS", style = MaterialTheme.typography.labelMedium, color = Hud.colors.dim)
+                        Text(count(albums.size, "ALBUM", "ALBUMS"), style = MaterialTheme.typography.labelMedium, color = Hud.colors.dim)
                         Spacer(Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             HudButton("Play", { scope.launch { app.attempt { app.player.play(songsOf(app, albums)) } } }, icon = Icons.Rounded.PlayArrow)
                             HudButton("Shuffle", { scope.launch { app.attempt { app.player.play(songsOf(app, albums).shuffled()) } } }, icon = Icons.Rounded.Shuffle, filled = false)
                             HudButton("More like this", {
@@ -185,8 +237,12 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                 val seed = "the artist ${artist.name}" + if (genres.isEmpty()) "" else " (${genres.joinToString()})"
                                 nav.go(Screen.MoreLike(MoreLikeSeed(artist.name, artist.name, artistId = artist.id, aiSeed = seed, cover = artist.coverArt)))
                             }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                            // Deleting music is set apart from playing it.
                             if (app.canRemoveMusic) {
-                                HudButton("Remove from server…", { app.removeFromServer(ui, artist.name, null, null, { it.artistId == artist.id }) { if (nav.current == Screen.Artist(artist.id)) nav.back() } }, icon = Icons.Rounded.Delete, filled = false)
+                                HudButton(
+                                    "Remove from server…", { app.removeFromServer(ui, artist.name, null, null, { it.artistId == artist.id }) { if (nav.current == Screen.Artist(artist.id)) nav.back() } },
+                                    Modifier.padding(start = 16.dp), icon = Icons.Rounded.Delete, filled = false, danger = true,
+                                )
                             }
                         }
                     }
@@ -195,6 +251,8 @@ fun ArtistScreen(app: DesktopApp, nav: Navigator, id: String) {
             fullWidth { SectionHeader("Albums") }
             items(albums, key = { it.id }) { album -> AlbumCard(app, nav, album) }
             if (config.youtubeCatalog) fullWidth { MoreOnYouTube(app, nav, artist.name, albums.map { it.name }) }
+        }
+        GridScrollbar(grid)
         }
     }
 }
@@ -205,34 +263,57 @@ private suspend fun songsOf(app: DesktopApp, albums: List<Album>): List<ConnectS
 
 @Composable
 fun AlbumsScreen(app: DesktopApp, nav: Navigator) {
+    val grid = rememberLazyGridState()
+    // Back from an album the grid comes back where it was. Pages load up to there before it's shown: shown with
+    // fewer albums than that, it would start at the top again.
+    val restored = remember { grid.firstVisibleItemIndex }
     val albums = remember { mutableStateListOf<Album>() }
     var loading by remember { mutableStateOf(false) }
     var done by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    fun more() {
+    suspend fun more() {
         if (loading || done) return
         loading = true
-        scope.launch {
-            try {
-                val page = app.api.albumList(AlbumListType.BY_NAME, PAGE, albums.size)
-                albums += page.filter { a -> albums.none { it.id == a.id } }
-                done = page.size < PAGE
-            } catch (e: Exception) {
-                error = e.userMessage()
-            }
+        try {
+            val page = app.api.albumList(AlbumListType.BY_NAME, PAGE, albums.size)
+            albums += page.filter { a -> albums.none { it.id == a.id } }
+            done = page.size < PAGE
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.userMessage()
+        } finally {
             loading = false
         }
     }
-    LaunchedEffect(Unit) { more() }
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Albums", "A–Z")
-        error?.let { Text(it, color = Hud.colors.danger, modifier = Modifier.padding(horizontal = 28.dp)) }
-        LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), contentPadding = contentPadding) {
-            items(albums, key = { it.id }) { album -> AlbumCard(app, nav, album) }
-            if (!done) fullWidth {
+        val failed = error
+        when {
+            albums.size <= restored && failed != null -> EmptyState(Icons.Rounded.CloudOff, "Signal lost", failed) { HudButton("Retry", { error = null }) }
+            albums.size <= restored && !done -> {
                 LaunchedEffect(albums.size) { more() }
-                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(color = Hud.colors.accent) }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Hud.colors.accent) }
+            }
+            albums.isEmpty() -> EmptyState(Icons.Rounded.Album, "No albums yet", "Your music server's library is empty.")
+            else -> Box(Modifier.fillMaxSize()) {
+                LazyVerticalGrid(GridCellsCards, Modifier.fillMaxSize(), state = grid, contentPadding = contentPadding) {
+                    items(albums, key = { it.id }) { album -> AlbumCard(app, nav, album) }
+                    if (!done) fullWidth {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                            if (failed != null) {
+                                // Not tried again on its own: the page stays put until Retry.
+                                Text(failed, style = MaterialTheme.typography.bodyMedium, color = Hud.colors.danger, modifier = Modifier.weight(1f, fill = false))
+                                Spacer(Modifier.width(12.dp))
+                                HudButton("Retry", { error = null }, filled = false)
+                            } else {
+                                LaunchedEffect(albums.size) { more() }
+                                CircularProgressIndicator(color = Hud.colors.accent)
+                            }
+                        }
+                    }
+                }
+                GridScrollbar(grid)
             }
         }
     }
@@ -253,14 +334,18 @@ fun AlbumScreen(app: DesktopApp, nav: Navigator, id: String) {
             songs = album.song,
             onSubtitle = album.artistId?.let { artistId -> { nav.go(Screen.Artist(artistId)) } },
             numberOf = { song, _ -> song.track },
+            albumArtist = album.artistLabel,
+            discTitles = album.discTitles.associate { it.disc to it.title },
             extraButtons = {
                 HudButton("More like this", { nav.go(Screen.MoreLike(albumLike(album))) }, icon = Icons.Rounded.AutoAwesome, filled = false)
+                val ui = LocalUi.current
+                MoreButton({ albumMenu(app, nav, ui, album) }, 40.dp)
             },
         )
     }
 }
 
-/** Header with cover and play buttons, then the songs. */
+/** Header with cover and play buttons, then the songs: by disc when there's more than one. */
 @Composable
 private fun TrackListPage(
     app: DesktopApp,
@@ -271,13 +356,19 @@ private fun TrackListPage(
     songs: List<Song>,
     onSubtitle: (() -> Unit)? = null,
     numberOf: (Song, Int) -> Int?,
+    /** Songs by them show just their title; others say who's on them. */
+    albumArtist: String? = null,
+    discTitles: Map<Int, String> = emptyMap(),
     extraButtons: @Composable () -> Unit = {},
 ) {
     val hud = Hud.colors
     val state by app.player.state.collectAsState()
     val queue = remember(songs) { songs.map { it.toConnectSong() } }
     val total = songs.sumOf { it.duration ?: 0 }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+    val discs = songs.mapNotNull { it.discNumber }.distinct()
+    val list = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = contentPadding) {
         item {
             Row(Modifier.padding(vertical = 16.dp), verticalAlignment = Alignment.Bottom) {
                 Cover(app, coverId, Modifier.size(220.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.medium), size = 600, shape = MaterialTheme.shapes.medium)
@@ -289,25 +380,38 @@ private fun TrackListPage(
                         subtitle, style = MaterialTheme.typography.titleMedium, color = hud.accent2,
                         modifier = if (onSubtitle != null) Modifier.clickable(onClick = onSubtitle) else Modifier,
                     )
-                    Text("${songs.size} SONGS // ${formatDuration(total.toLong())}", style = MaterialTheme.typography.labelMedium, color = hud.dim)
+                    Text("${count(songs.size, "SONG", "SONGS")} // ${formatDuration(total.toLong())}", style = MaterialTheme.typography.labelMedium, color = hud.dim)
                     Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Wraps in a narrow window (or with the queue open) instead of cutting buttons off.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HudButton("Play", { app.player.play(queue) }, icon = Icons.Rounded.PlayArrow, enabled = queue.isNotEmpty())
                         HudButton("Shuffle", { app.player.play(queue, index = queue.indices.randomOrNull() ?: 0, shuffle = true) }, icon = Icons.Rounded.Shuffle, filled = false, enabled = queue.isNotEmpty())
-                        HudButton("Add to queue", { app.player.enqueue(queue); app.message("Added ${queue.size} songs to the queue") }, icon = Icons.AutoMirrored.Rounded.PlaylistAdd, filled = false, enabled = queue.isNotEmpty())
+                        HudButton("Add to queue", { app.player.enqueue(queue); app.message("Added ${count(queue.size, "song", "songs")} to the queue") }, icon = Icons.AutoMirrored.Rounded.QueueMusic, filled = false, enabled = queue.isNotEmpty())
                         val ui = LocalUi.current
-                        HudButton("Add to playlist", { ui.addToPlaylist = queue }, filled = false, enabled = queue.isNotEmpty())
+                        HudButton("Add to playlist", { ui.addToPlaylist = queue }, icon = Icons.AutoMirrored.Rounded.PlaylistAdd, filled = false, enabled = queue.isNotEmpty())
                         extraButtons()
                     }
                 }
             }
         }
-        itemsIndexed(queue, key = { i, s -> "$i:${s.id}" }) { i, song ->
-            SongRow(app, song, number = numberOf(songs[i], i), playing = state.current?.let { it.id == song.id && it.source == song.source } == true, onPlay = { app.player.play(queue, i) })
+        songs.forEachIndexed { i, song ->
+            val disc = song.discNumber
+            if (discs.size > 1 && disc != null && disc != songs.getOrNull(i - 1)?.discNumber) {
+                item(key = "disc:$i") { SectionHeader(listOfNotNull("Disc $disc", discTitles[disc]?.takeIf { it.isNotBlank() }).joinToString(" · ")) }
+            }
+            item(key = "$i:${song.id}") {
+                val connect = queue[i]
+                SongRow(
+                    app, connect, number = numberOf(song, i), playing = state.current?.let { it.id == connect.id && it.source == connect.source } == true,
+                    onPlay = { app.player.play(queue, i) },
+                    detail = connect.artist?.takeIf { albumArtist == null || !it.equals(albumArtist, ignoreCase = true) }.orEmpty(),
+                )
+            }
         }
     }
+    ListScrollbar(list)
+    }
 }
-
 
 /**
  * The songs that fit the search best, whatever their source: the library, YouTube Music or Deezer. On a tie
@@ -356,8 +460,16 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
         OutlinedTextField(
             query, { query = it }, placeholder = { Text("SEARCH THE ARCHIVE_", style = MaterialTheme.typography.labelMedium) },
             leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Hud.colors.accent) }, singleLine = true,
+            trailingIcon = if (query.isEmpty()) null else {
+                {
+                    Tip("Clear (Esc)") {
+                        IconButton(onClick = { query = ""; focus.requestFocus() }) { Icon(Icons.Rounded.Close, "Clear", tint = Hud.colors.dim) }
+                    }
+                }
+            },
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Hud.colors.accent, unfocusedBorderColor = Hud.colors.line),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp).focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp).focusRequester(focus)
+                .onKeyEvent { if (it.key == Key.Escape && it.type == KeyEventType.KeyDown && query.isNotEmpty()) { query = ""; true } else false },
         )
         val q = query.trim()
         if (q.isEmpty()) {
@@ -404,7 +516,12 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                 delay(4_000)
             }
         }
-        LoadContent(library) { result ->
+        // A thin bar while anything is on its way; what was found for the last letters stays (dimmed) meanwhile.
+        val searching = listOf(library, youtube, catalog, web).any { it.state is Load.Loading }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 4.dp).height(2.dp)) {
+            if (searching) LinearProgressIndicator(Modifier.fillMaxSize(), color = Hud.colors.accent, trackColor = Color.Transparent)
+        }
+        LoadContent(library, keepLast = true) { result ->
             val have = result.song.map { Names.key(it.artist.orEmpty(), it.title) }.toSet()
             val yt = ((youtube.state as? Load.Ready)?.value).orEmpty().filter { Names.key(it.artist.orEmpty(), it.title) !in have }
             // Disliked songs (and songs by artists said no to) go last, and never into the best matches.
@@ -412,16 +529,18 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
             val songs = remember(result, disliked) { app.dislikes.demote(result.song.map { it.toConnectSong() }, { it.artist }, { it.title }) }
             val ytQueue = remember(yt, disliked) { app.dislikes.demote(yt.map { it.toConnectSong(ConnectSong.YOUTUBE) }, { it.artist }, { it.title }) }
             val (ytArtists, ytAlbums) = (catalog.state as? Load.Ready)?.value ?: (emptyList<YtArtist>() to emptyList())
-            if (result.artist.isEmpty() && result.album.isEmpty() && songs.isEmpty() && ytQueue.isEmpty() && localHits.isEmpty() && ytArtists.isEmpty() && youtube.state !is Load.Loading) {
+            val webSongs = ((web.state as? Load.Ready)?.value)?.songs.orEmpty()
+            if (nothingFound(result.artist, result.album, songs, ytQueue, localHits, ytArtists, ytAlbums, webSongs, stillLoading = searching)) {
                 EmptyState(Icons.Rounded.SearchOff, "Nothing found for “$q”", "Request it from the Lidarr page.")
                 return@LoadContent
             }
-            val webSongs = ((web.state as? Load.Ready)?.value)?.songs.orEmpty()
             val best = remember(result, yt, webSongs, disliked) {
                 fun ok(artist: String?, title: String) = !app.dislikes.isDisliked(artist, title)
                 bestMatches(q, songs.filter { ok(it.artist, it.title) }, ytQueue.filter { ok(it.artist, it.title) }, webSongs.filter { ok(it.artist, it.title) })
             }
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+            val list = rememberLazyListState()
+            Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = contentPadding) {
                 if (best.isNotEmpty()) {
                     item { SectionHeader("Best matches") }
                     items(best, key = { "best:" + it.first }) { (_, match) ->
@@ -516,9 +635,14 @@ fun SearchScreen(app: DesktopApp, nav: Navigator) {
                     }
                 }
             }
+            ListScrollbar(list)
+            }
         }
     }
 }
+
+/** Whether a search found nothing anywhere, with nothing more on its way. */
+internal fun nothingFound(vararg found: Collection<*>, stillLoading: Boolean) = !stillLoading && found.all { it.isEmpty() }
 
 @Composable
 fun ScreenTitle(title: String, subtitle: String?, trailing: @Composable () -> Unit = {}) {

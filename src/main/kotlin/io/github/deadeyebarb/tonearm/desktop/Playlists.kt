@@ -91,7 +91,7 @@ class DesktopPlaylists(
         }
     }
 
-    private fun session() = sessions.current() ?: throw IOException("No music server set up")
+    private fun session() = sessions.require()
 
     /** The playlist's rows in order: library songs with their placeholders after them. */
     fun merged(playlist: Playlist, pending: List<PendingTrack> = _pending.value[playlist.id].orEmpty()): List<PlaylistItem> {
@@ -233,7 +233,7 @@ class DesktopPlaylists(
      * here as soon as the server has it; one that fails keeps its placeholders for next time.
      */
     suspend fun resolve(): Int = lock.withLock {
-        val session = sessions.currentOrNull() ?: return@withLock 0
+        val session = sessions.current() ?: return@withLock 0
         var moved = 0
         for ((playlistId, tracks) in _pending.value) {
             val found = tracks.mapNotNull { track -> orNull { api.findSong(track.ref, session) }?.let { track to it } }

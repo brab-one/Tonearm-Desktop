@@ -7,7 +7,6 @@ import io.github.deadeyebarb.tonearm.connect.WebSearch
 import io.github.deadeyebarb.tonearm.connect.AiSearch
 import io.github.deadeyebarb.tonearm.connect.SimilarArtist
 import io.github.deadeyebarb.tonearm.connect.DiscoveryPicks
-import io.github.deadeyebarb.tonearm.subsonic.NoServerException
 import io.github.deadeyebarb.tonearm.connect.AiPicks
 import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
 import io.github.deadeyebarb.tonearm.likes.Dislikes
@@ -161,7 +160,7 @@ class DesktopApp {
     /** Sends what was heard to the Tonearm server (when it keeps a history); what doesn't get there waits for the next song. */
     private suspend fun sendPlays() = sendingPlays.withLock {
         val batch = synchronized(unsentPlays) { unsentPlays.toList() }.ifEmpty { return@withLock }
-        val session = sessions.currentOrNull() ?: return@withLock
+        val session = sessions.current() ?: return@withLock
         try {
             // Only an answer counts: route() looks the Tonearm server up without hiding a failure, so plays wait
             // while it can't be reached, and are dropped when there is none.
@@ -179,7 +178,7 @@ class DesktopApp {
 
     /** "Not for me": the Tonearm server leaves [artist] out of the picks from now on. */
     suspend fun dismiss(artist: String) {
-        connectClient.dismiss(sessions.current() ?: throw NoServerException(), artist)
+        connectClient.dismiss(sessions.require(), artist)
         dislikes.refresh()
     }
 
@@ -219,7 +218,7 @@ class DesktopApp {
 
     /** Album suggestions from the Tonearm server's AI; [refresh] asks for new ones, a [seed] for ones like that. */
     suspend fun aiPicks(refresh: Boolean = false, seed: String? = null): AiPicks =
-        connectClient.aiPicks(sessions.current() ?: throw NoServerException(), refresh, seed)
+        connectClient.aiPicks(sessions.require(), refresh, seed)
     val likes = DesktopLikes(scope, api, sessions, config, lidarr, songRequests, LikesSync(connectClient, json), connect::route, json, AppDirs.config, ::message)
         .also { it.start() }
     val playlists = DesktopPlaylists(scope, api, sessions, youtube, lidarr, songRequests, json, File(AppDirs.config, "playlist-placeholders.json"), ::message)
@@ -251,7 +250,7 @@ class DesktopApp {
             while (true) {
                 val running = File(AppDirs.config, "weekly-run.json").exists()
                 if (running || System.currentTimeMillis() - checked >= 30 * 60_000L) {
-                    val session = sessions.currentOrNull()
+                    val session = sessions.current()
                     // Lidarr may come from the Tonearm server, which has to be looked up first after a start.
                     if (session != null) runCatching { tonearmServer.refresh(session) }
                     val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited && tonearmServer.server.value?.picksFolder == null }
@@ -306,7 +305,7 @@ class DesktopApp {
     }
 
     /** What the server's AI makes of a search; running until it has answered. */
-    suspend fun aiSearch(query: String): AiSearch = connectClient.aiSearch(sessions.current() ?: throw NoServerException(), query)
+    suspend fun aiSearch(query: String): AiSearch = connectClient.aiSearch(sessions.require(), query)
 
     /** Plays a song known by name: the library's copy if it has one, else YouTube Music's, then songs like it. */
     suspend fun playFound(artist: String, title: String) {
@@ -323,7 +322,7 @@ class DesktopApp {
     /** "When the queue ends": more of the same, or another playlist. */
     private suspend fun continueQueue(last: ConnectSong, played: Set<String>): List<ConnectSong> {
         val cfg = config.state.value
-        val session = sessions.currentOrNull()
+        val session = sessions.current()
         val next = when (cfg.whenQueueEnds) {
             "similar" -> {
                 // A file on this computer has no similar songs on the server; YouTube Music's radio finds them.

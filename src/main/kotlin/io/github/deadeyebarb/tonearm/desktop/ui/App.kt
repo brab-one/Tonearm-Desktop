@@ -1,11 +1,14 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
-import androidx.compose.foundation.DarkDefaultContextMenuRepresentation
+import androidx.compose.foundation.DefaultContextMenuRepresentation
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -51,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -66,6 +71,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -73,7 +79,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
+import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
@@ -88,6 +97,7 @@ import io.github.deadeyebarb.tonearm.youtube.YtAlbum
 import io.github.deadeyebarb.tonearm.youtube.YtArtist
 import kotlinx.coroutines.launch
 import org.jetbrains.skia.Image as SkiaImage
+import kotlin.math.roundToInt
 
 /** Where the main area is. */
 sealed interface Screen {
@@ -198,7 +208,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
     CompositionLocalProvider(
         LocalUi provides ui,
         LocalNav provides nav,
-        LocalContextMenuRepresentation provides DarkDefaultContextMenuRepresentation,
+        LocalContextMenuRepresentation provides DefaultContextMenuRepresentation(backgroundColor = hud.panelHigh, textColor = hud.text, itemHoverColor = hud.accent.copy(alpha = 0.16f)),
     ) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(hud.deep, hud.void)))) {
         if (config.server == null) {
@@ -209,11 +219,14 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
                         Column(Modifier.fillMaxSize()) {
-                            if (nav.canBack || nav.canForward) {
-                                Row(Modifier.padding(start = 8.dp, top = 8.dp)) {
+                            // Always there, so screens don't move down once there's somewhere to go back to.
+                            Row(Modifier.padding(start = 8.dp, top = 8.dp)) {
+                                Tip("Back (Alt+←)") {
                                     IconButton(onClick = nav::back, enabled = nav.canBack) {
                                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = if (nav.canBack) hud.text else hud.line)
                                     }
+                                }
+                                Tip("Forward (Alt+→)") {
                                     IconButton(onClick = nav::forward, enabled = nav.canForward) {
                                         Icon(Icons.AutoMirrored.Rounded.ArrowForward, "Forward", tint = if (nav.canForward) hud.text else hud.line)
                                     }
@@ -231,7 +244,12 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
                 if (queueOpen) QueuePanel(app) { queueOpen = false }
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 104.dp))
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 104.dp)) { data ->
+            Snackbar(
+                data, shape = MaterialTheme.shapes.small, containerColor = hud.panelHigh, contentColor = hud.text, actionColor = hud.accent,
+                modifier = Modifier.border(1.dp, hud.accent.copy(alpha = 0.6f), MaterialTheme.shapes.small),
+            )
+        }
         Dialogs(app)
     }
     }
@@ -265,6 +283,7 @@ private fun Rail(app: DesktopApp, nav: Navigator) {
     val hud = Hud.colors
     val root = nav.section
     val connect by app.connect.status.collectAsState()
+    val config by app.config.state.collectAsState()
     val logo = remember { BitmapPainter(SkiaImage.makeFromEncoded(requireNotNull(DesktopApp::class.java.getResourceAsStream("/icon.png")).readBytes()).toComposeImageBitmap()) }
     Column(Modifier.width(212.dp).fillMaxHeight().background(hud.void.copy(alpha = 0.6f)).padding(vertical = 18.dp)) {
         Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -275,7 +294,7 @@ private fun Rail(app: DesktopApp, nav: Navigator) {
                     "TONEARM", maxLines = 1, softWrap = false,
                     style = TextStyle(fontFamily = Orbitron, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp, brush = Brush.horizontalGradient(listOf(hud.accent, hud.accent2))),
                 )
-                Text("DESKTOP // mTLS", style = MaterialTheme.typography.labelSmall, color = hud.dim)
+                Text(railTagline(config.server), style = MaterialTheme.typography.labelSmall, color = hud.dim)
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -307,6 +326,18 @@ private fun Rail(app: DesktopApp, nav: Navigator) {
     }
 }
 
+/** Under the logo: how the music server is reached, with a client certificate (mTLS), over TLS or plain. */
+internal fun railTagline(server: ServerConfig?): String {
+    val https = server?.baseUrl?.startsWith("https:", ignoreCase = true) == true
+    return when {
+        server == null -> "DESKTOP"
+        https && server.clientCert != null -> "DESKTOP // mTLS"
+        https -> "DESKTOP // HTTPS"
+        else -> "DESKTOP // HTTP"
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean) {
     val hud = Hud.colors
@@ -333,9 +364,18 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                                     song.artist.orEmpty(), song.artist?.let { artist -> link.clickable { app.openArtist(nav, artist, song.artistId.takeIf { song.source == ConnectSong.SERVER }) } } ?: Modifier,
                                     style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(qualityLine(song, state), style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1)
-                                outputLine(state)?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1) }
-                                rememberFetchState(app, song)?.let { Text(it.label().uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent, maxLines = 1) }
+                                // The whole signal path on hover; the bar only has room for what it is, and a resampled output.
+                                val quality = qualityLine(song, state)
+                                val output = outputLine(state)
+                                Tip(listOfNotNull(quality, output).joinToString("\n")) {
+                                    Column {
+                                        Text(quality, style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (output != null && state.outRate != state.sampleRate) {
+                                            Text(output, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                                rememberFetchState(app, song)?.let { Text(it.label().uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             }
                         }
                     }
@@ -349,37 +389,58 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
         }
         Column(Modifier.weight(1.3f), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(onClick = { app.player.setShuffle(!state.shuffle) }) {
-                    Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (state.shuffle) hud.accent else hud.dim)
+                Tip(if (state.shuffle) "Shuffle: on" else "Shuffle: off") {
+                    IconButton(onClick = { app.player.setShuffle(!state.shuffle) }) {
+                        Icon(Icons.Rounded.Shuffle, "Shuffle", tint = if (state.shuffle) hud.accent else hud.dim)
+                    }
                 }
-                IconButton(onClick = app.player::previous) { Icon(Icons.Rounded.SkipPrevious, "Previous", tint = hud.text, modifier = Modifier.size(30.dp)) }
-                Box(
-                    Modifier.size(48.dp).clip(CircleShape).background(hud.accent).clickable(onClick = app.player::togglePlay),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play", tint = hud.void, modifier = Modifier.size(30.dp))
+                Tip("Previous (Ctrl+←)") {
+                    IconButton(onClick = app.player::previous) { Icon(Icons.Rounded.SkipPrevious, "Previous", tint = hud.text, modifier = Modifier.size(30.dp)) }
                 }
-                IconButton(onClick = app.player::next) { Icon(Icons.Rounded.SkipNext, "Next", tint = hud.text, modifier = Modifier.size(30.dp)) }
-                IconButton(onClick = {
-                    app.player.setRepeat(when (state.repeat) { "off" -> "all"; "all" -> "one"; else -> "off" })
-                }) {
-                    Icon(if (state.repeat == "one") Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, "Repeat", tint = if (state.repeat != "off") hud.accent else hud.dim)
+                Tip(if (state.playing) "Pause (Ctrl+P)" else "Play (Ctrl+P)") {
+                    Box(
+                        Modifier.size(48.dp).clip(CircleShape).background(hud.accent).clickable(onClick = app.player::togglePlay),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play", tint = hud.void, modifier = Modifier.size(30.dp))
+                    }
+                }
+                Tip("Next (Ctrl+→)") {
+                    IconButton(onClick = app.player::next) { Icon(Icons.Rounded.SkipNext, "Next", tint = hud.text, modifier = Modifier.size(30.dp)) }
+                }
+                Tip(when (state.repeat) { "all" -> "Repeat: the queue"; "one" -> "Repeat: this song"; else -> "Repeat: off" }) {
+                    IconButton(onClick = {
+                        app.player.setRepeat(when (state.repeat) { "off" -> "all"; "all" -> "one"; else -> "off" })
+                    }) {
+                        Icon(if (state.repeat == "one") Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, "Repeat", tint = if (state.repeat != "off") hud.accent else hud.dim)
+                    }
                 }
             }
             SeekBar(state) { app.player.seek(it) }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
             var dragging by remember { mutableStateOf<Float?>(null) }
-            Slider(
-                value = dragging ?: (state.volume / 100f),
-                onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
-                onValueChangeFinished = { dragging = null },
-                colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-                modifier = Modifier.width(140.dp),
-            )
+            // The wheel turns it too, 5% a notch.
+            val wheel = Modifier.onPointerEvent(PointerEventType.Scroll) { event ->
+                val notches = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                if (notches != 0f) app.player.setVolume((state.volume - notches * 5).roundToInt().coerceIn(0, 100))
+            }
+            Tip("Volume ${state.volume}%", wheel) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
+                    Slider(
+                        value = dragging ?: (state.volume / 100f),
+                        onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
+                        onValueChangeFinished = { dragging = null },
+                        colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
+                        modifier = Modifier.width(140.dp),
+                    )
+                }
+            }
             Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
+            Tip(if (queueOpen) "Hide the queue" else "Show the queue") {
+                IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
+            }
         }
     }
 }
@@ -389,7 +450,8 @@ private fun SeekBar(state: PlayerState, onSeek: (Long) -> Unit) {
     val hud = Hud.colors
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    // At most as wide as it was meant to be; narrower, the slider gives way so both times stay readable.
+    Row(Modifier.widthIn(max = 516.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(formatDuration(((dragging?.times(duration))?.toLong() ?: state.positionMs) / 1000), style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.width(44.dp))
         Slider(
             value = dragging ?: if (duration > 0) (state.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f,
@@ -400,7 +462,7 @@ private fun SeekBar(state: PlayerState, onSeek: (Long) -> Unit) {
             },
             enabled = duration > 0,
             colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-            modifier = Modifier.width(420.dp).height(24.dp),
+            modifier = Modifier.weight(1f).height(24.dp),
         )
         Text(formatDuration(duration / 1000), style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.padding(start = 8.dp).width(44.dp))
     }
@@ -433,25 +495,76 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
     val hud = Hud.colors
     val state by app.player.state.collectAsState()
     val list = rememberLazyListState()
-    LaunchedEffect(Unit) { if (state.index > 0) list.scrollToItem(state.index) }
+    // The song playing stays in sight: on opening, and when it moves on while the one before was in sight.
+    var shown by remember { mutableIntStateOf(-1) }
+    LaunchedEffect(state.index) {
+        val index = state.index
+        if (index < 0) return@LaunchedEffect
+        val visible = list.layoutInfo.visibleItemsInfo.map { it.index }
+        if (shown < 0) list.scrollToItem(index) else if (shown in visible && index !in visible) list.animateScrollToItem(index)
+        shown = index
+    }
     Column(Modifier.width(380.dp).fillMaxHeight().background(hud.void.copy(alpha = 0.7f)).border(1.dp, hud.line)) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("QUEUE", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            Text("${state.queue.size} SONGS", style = MaterialTheme.typography.labelSmall, color = hud.dim)
+            Column(Modifier.weight(1f)) {
+                Text("QUEUE", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "${count(state.queue.size, "SONG", "SONGS")} // ${formatDuration(state.queue.sumOf { it.duration ?: 0 }.toLong())}",
+                    style = MaterialTheme.typography.labelSmall, color = hud.dim,
+                )
+            }
             val ui = LocalUi.current
-            IconButton(onClick = {
-                ui.prompt = Prompt("Save the queue as a playlist", "Name", "Queue", "Save") { name ->
-                    app.scope.launch { app.attempt { app.playlists.create(name, state.queue); app.message("Saved as “$name”") } }
-                }
-            }, enabled = state.queue.isNotEmpty()) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "Save as playlist", tint = hud.dim) }
-            IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close queue", tint = hud.dim) }
-        }
-        LazyColumn(state = list, modifier = Modifier.weight(1f)) {
-            itemsIndexed(state.queue, key = { i, s -> "$i:${s.source}:${s.id}" }) { i, song ->
-                SongRow(app, song, number = null, playing = i == state.index, onPlay = { app.player.jump(i) }, showCover = true) {
-                    IconButton(onClick = { app.player.remove(i) }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Rounded.Close, "Remove", tint = hud.dim, modifier = Modifier.size(16.dp))
+            Tip("Save as a playlist") {
+                IconButton(onClick = {
+                    ui.prompt = Prompt("Save the queue as a playlist", "Name", "Queue", "Save") { name ->
+                        app.scope.launch { app.attempt { app.playlists.create(name, state.queue); app.message("Saved as “$name”") } }
                     }
+                }, enabled = state.queue.isNotEmpty()) { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, "Save as playlist", tint = hud.dim) }
+            }
+            Tip("Close the queue") {
+                IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close queue", tint = hud.dim) }
+            }
+        }
+        if (state.queue.isEmpty()) {
+            EmptyState(Icons.AutoMirrored.Rounded.QueueMusic, "Nothing queued", "Play something, or right-click a song → Add to queue.")
+            return@Column
+        }
+        Box(Modifier.weight(1f)) {
+            LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(state.queue, key = { i, s -> "$i:${s.source}:${s.id}" }) { i, song ->
+                    QueueRow(app, song, playing = i == state.index, onPlay = { app.player.jump(i) }, onRemove = { app.player.remove(i) })
+                }
+            }
+            ListScrollbar(list)
+        }
+    }
+}
+
+/** A song in the queue, compact for the narrow panel: cover, title and artist, length, and a button to take it out. */
+@Composable
+private fun QueueRow(app: DesktopApp, song: ConnectSong, playing: Boolean, onPlay: () -> Unit, onRemove: () -> Unit) {
+    val hud = Hud.colors
+    val nav = LocalNav.current
+    val ui = LocalUi.current
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    MenuArea({ songMenu(app, nav, ui, song) }) {
+        Row(
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+                .background(if (playing) hud.accent.copy(alpha = 0.12f) else if (hovered) hud.panelHigh else Color.Transparent)
+                .hoverable(hover).clickable(onClick = onPlay).padding(start = 12.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SongCover(app, song, Modifier.size(40.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(song.title, style = MaterialTheme.typography.titleSmall, color = if (playing) hud.accent else hud.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(song.artist.orEmpty(), style = MaterialTheme.typography.bodySmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(song.duration?.let { formatDuration(it.toLong()) }.orEmpty(), style = MaterialTheme.typography.labelMedium, color = hud.dim, modifier = Modifier.padding(start = 8.dp))
+            Tip("Remove from the queue") {
+                IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Rounded.Close, "Remove", tint = hud.dim, modifier = Modifier.size(16.dp))
                 }
             }
         }

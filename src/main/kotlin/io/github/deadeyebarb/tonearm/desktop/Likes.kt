@@ -118,7 +118,7 @@ class DesktopLikes(
     /** Likes on the server the pending songs that have arrived. */
     suspend fun resolveNow(): List<String> = resolving.withLock {
         if (pending.items.value.isEmpty()) return emptyList()
-        val session = sessions.currentOrNull() ?: return emptyList()
+        val session = sessions.current() ?: return emptyList()
         val found = runCatching { pending.resolve(api, session) }.getOrDefault(emptyList())
         server.update { it + found.map { s -> s.id } }
         if (found.isNotEmpty()) syncSoon()
@@ -144,7 +144,7 @@ class DesktopLikes(
             var round = 0
             while (true) {
                 syncNow()
-                if (sessions.currentOrNull() != null && round++ % 5 == 0) {
+                if (sessions.current() != null && round++ % 5 == 0) {
                     runCatching { refresh() }
                     runCatching { resolveNow() }
                     requestForgotten()
