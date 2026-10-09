@@ -35,6 +35,7 @@ import io.github.deadeyebarb.tonearm.desktop.system.MediaKeys
 import io.github.deadeyebarb.tonearm.desktop.system.Mpris
 import io.github.deadeyebarb.tonearm.desktop.system.SessionBus
 import io.github.deadeyebarb.tonearm.desktop.system.StatusNotifier
+import io.github.deadeyebarb.tonearm.desktop.ui.MiniPlayer
 import io.github.deadeyebarb.tonearm.desktop.ui.Navigator
 import io.github.deadeyebarb.tonearm.desktop.ui.TonearmApp
 import io.github.deadeyebarb.tonearm.desktop.ui.TonearmTheme
@@ -87,6 +88,8 @@ fun main() {
     if (AppDirs.isWindows) MediaKeys.startWindowsHotkeys(app.player)
     // Elsewhere (Windows, macOS, Linux without a StatusNotifier watcher) the tray is AWT's, when there is one.
     val awtTray = statusNotifier == null && isTraySupported
+    val mini = MiniWindow(app, main) { statusNotifier?.trayShown == true || awtTray }
+    main.beforeQuit = mini::save
 
     application {
         main.exit = ::exitApplication
@@ -141,6 +144,32 @@ fun main() {
             snapshotFlow { listOf(main.state.placement, main.state.position, main.state.size, main.state.isMinimized) }
                 .drop(1).debounce(500).collect { main.save() }
         }
+        // The mini player's place, half a second after it's moved.
+        LaunchedEffect(mini.state) {
+            snapshotFlow { mini.state.position }.drop(1).debounce(500).collect { mini.save() }
+        }
+        if (mini.open) {
+            Window(
+                onCloseRequest = mini::close, state = mini.state, title = "Tonearm mini player", icon = icon,
+                undecorated = true, resizable = false, alwaysOnTop = true,
+                onPreviewKeyEvent = { event ->
+                    if (event.type != KeyEventType.KeyDown) return@Window false
+                    when {
+                        event.key == Key.MediaPlayPause -> MediaKeys.run(app.player, MediaKeys.PLAY_PAUSE, inWindow = true)
+                        event.key == Key.MediaNext -> MediaKeys.run(app.player, MediaKeys.NEXT, inWindow = true)
+                        event.key == Key.MediaPrevious -> MediaKeys.run(app.player, MediaKeys.PREVIOUS, inWindow = true)
+                        event.key == Key.Spacebar || event.isCtrlPressed && event.key == Key.P -> app.player.togglePlay()
+                        event.isCtrlPressed && event.key == Key.DirectionRight -> app.player.next()
+                        event.isCtrlPressed && event.key == Key.DirectionLeft -> app.player.previous()
+                        event.key == Key.Escape -> mini.close()
+                        else -> return@Window false
+                    }
+                    true
+                },
+            ) {
+                TonearmTheme { MiniPlayer(app, mini::expand, mini::close) }
+            }
+        }
         Window(
             onCloseRequest = {
                 // With a tray icon to come back from, closing the window leaves the music playing.
@@ -188,7 +217,7 @@ fun main() {
                 window.toFront()
                 window.requestFocus()
             }
-            TonearmTheme { TonearmApp(app, nav, quickOpen) { quickOpen = false } }
+            TonearmTheme { TonearmApp(app, nav, quickOpen, onQuickClose = { quickOpen = false }, mini = mini) }
         }
     }
     // Background work (Connect's polling, HTTP threads) would otherwise keep the process alive without a window.

@@ -42,6 +42,7 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -91,6 +92,7 @@ import androidx.compose.ui.unit.sp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.desktop.MiniWindow
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
@@ -188,9 +190,12 @@ private val railItems = listOf(
     RailItem(Screen.Settings, "Settings", Icons.Rounded.Settings),
 )
 
-/** The main window's content. [quickOpen]: the quick switcher (Ctrl+K) is open, and [onQuickClose] closes it. */
+/**
+ * The main window's content. [quickOpen]: the quick switcher (Ctrl+K) is open, and [onQuickClose] closes it; [mini]
+ * is the mini player the player bar opens.
+ */
 @Composable
-fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQuickClose: () -> Unit = {}) {
+fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQuickClose: () -> Unit = {}, mini: MiniWindow? = null) {
     val hud = Hud.colors
     val config by app.config.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
@@ -243,7 +248,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQu
                             }
                         }
                     }
-                    PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen)
+                    PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen, mini = mini)
                 }
                 if (queueOpen) QueuePanel(app) { queueOpen = false }
             }
@@ -345,7 +350,7 @@ internal fun railTagline(server: ServerConfig?): String {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean) {
+private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean, mini: MiniWindow?) {
     val hud = Hud.colors
     val ui = LocalUi.current
     val state by app.player.state.collectAsState()
@@ -422,7 +427,7 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                     }
                 }
             }
-            SeekBar(state) { app.player.seek(it) }
+            SeekBar(state, Modifier.widthIn(max = 516.dp).fillMaxWidth()) { app.player.seek(it) }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             // With the queue open, its header has it.
@@ -452,6 +457,11 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                 }
             }
             Spacer(Modifier.width(8.dp))
+            if (mini != null) {
+                Tip(if (mini.open) "Close the mini player" else "Mini player") {
+                    IconButton(onClick = mini::toggle) { Icon(Icons.Rounded.PictureInPictureAlt, "Mini player", tint = if (mini.open) hud.accent else hud.dim) }
+                }
+            }
             Tip(if (queueOpen) "Hide the queue" else "Show the queue") {
                 IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
             }
@@ -478,13 +488,13 @@ private fun RadioChip(title: String, onStop: () -> Unit, modifier: Modifier = Mo
     }
 }
 
+/** Where the song is, with both times; dragging seeks. Narrower than [modifier] allows, the slider gives way so both times stay readable. */
 @Composable
-private fun SeekBar(state: PlayerState, onSeek: (Long) -> Unit) {
+internal fun SeekBar(state: PlayerState, modifier: Modifier, onSeek: (Long) -> Unit) {
     val hud = Hud.colors
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs
-    // At most as wide as it was meant to be; narrower, the slider gives way so both times stay readable.
-    Row(Modifier.widthIn(max = 516.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(formatDuration(((dragging?.times(duration))?.toLong() ?: state.positionMs) / 1000), style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.width(44.dp))
         Slider(
             value = dragging ?: if (duration > 0) (state.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f,
