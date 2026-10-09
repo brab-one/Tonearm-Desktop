@@ -248,7 +248,9 @@ class DesktopApp {
                     val lidarrSetup = lidarr.requireOrNull()?.takeUnless { it.first.limited && tonearmServer.server.value?.picksFolder == null }
                     if (session != null && lidarrSetup != null) {
                         checked = System.currentTimeMillis()
-                        runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }.getOrNull()?.let(::message)
+                        runCatching { weekly.tick(lidarrSetup.first, lidarrSetup.second, session) }
+                            .onFailure { System.err.println("Weekly picks: ${it.javaClass.simpleName}: ${it.message}") }
+                            .getOrNull()?.let(::message)
                     }
                 }
                 delay(2 * 60_000L)
