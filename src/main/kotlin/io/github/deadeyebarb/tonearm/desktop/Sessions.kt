@@ -50,10 +50,11 @@ class DesktopSessions(
         ready()?.let { return it }
         val secrets = SecretStore.changes
         return try {
+            // Not built without its password: the server would only say the password is wrong.
             val password = SecretStore.read(server.secretEnc)
-            val session = ServerSession(server, password.orEmpty(), clientFor(server, base, dir))
-            // Without its password (the keyring didn't answer) it's used this once and built again next time.
-            if (password != null) cached = Built(server, secrets, session)
+                ?: throw java.io.IOException("Couldn't read the server password from the keyring; is it unlocked?")
+            val session = ServerSession(server, password, clientFor(server, base, dir))
+            cached = Built(server, secrets, session)
             problem = null
             session
         } catch (e: Exception) {
