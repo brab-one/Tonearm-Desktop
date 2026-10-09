@@ -37,6 +37,8 @@ class MainWindow(private val app: DesktopApp) {
         private set
     /** Ends the app: the application's exitApplication once it runs, the process before that. */
     var exit: () -> Unit = { exitProcess(0) }
+    /** Runs as the app quits, before it says goodbye (the mini player saves its place). */
+    var beforeQuit: () -> Unit = {}
     private var quitting = false
 
     private val openedAt = System.nanoTime()
@@ -73,11 +75,18 @@ class MainWindow(private val app: DesktopApp) {
 
     fun toggle() = if (onScreen()) hide() else show()
 
+    /** Down to the taskbar (where there's no tray to hide in). */
+    fun minimize() {
+        save()
+        state.isMinimized = true
+    }
+
     fun quit() {
         // Quit can come twice (the tray and MPRIS, or another click while the first is still saying goodbye).
         if (quitting) return
         quitting = true
         save()
+        beforeQuit()
         app.shutdown()
         exit()
     }
@@ -152,7 +161,7 @@ class MainWindow(private val app: DesktopApp) {
 
         private fun near(p: WindowPosition.Absolute, x: Float, y: Float) = abs(p.x.value - x) <= STALE_SLACK && abs(p.y.value - y) <= STALE_SLACK
 
-        private fun screens(): List<Screen> = runCatching {
+        internal fun screens(): List<Screen> = runCatching {
             val toolkit = Toolkit.getDefaultToolkit()
             GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { device ->
                 val bounds = device.defaultConfiguration.bounds

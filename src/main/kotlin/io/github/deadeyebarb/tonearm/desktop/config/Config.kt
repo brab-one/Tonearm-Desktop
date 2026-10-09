@@ -36,6 +36,8 @@ data class DesktopConfig(
     val closeToTray: Boolean = true,
     /** Where the window was, to open there again. */
     val window: SavedWindow? = null,
+    /** Where the mini player was. */
+    val mini: SavedMini? = null,
 ) {
     companion object {
         fun defaultDeviceName(): String {
@@ -85,6 +87,10 @@ data class AudioSettings(
     val gains: List<Double> = List(10) { 0.0 },
     val preampDb: Double = 0.0,
 )
+
+/** Where the mini player was (in the screen's units, like [SavedWindow]). */
+@Serializable
+data class SavedMini(val x: Int, val y: Int)
 
 /** The window's place and size (in the screen's units); no [x]/[y] means centered. */
 @Serializable

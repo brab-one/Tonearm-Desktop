@@ -36,6 +36,19 @@ submodule).
   for bit-perfect playback at the file's own rate and depth; the player bar shows what reaches the device),
   and a 10-band equalizer with presets and automatic headroom
 - **When the queue ends**: stop, similar music (library first, then YouTube Music's radio), or another playlist
+- **Picks radio** (Home): endless music from your weekly picks and the songs you liked lately, more added a few songs
+  ahead. With the Tonearm server 1.7.0 or later it comes from the server's radio, else it's made from the library
+  here. A chip in the player bar shows it and its ✕ stops it; it comes back after a restart
+- **Mix from a sentence** (Discover): describe what you'd like to hear ("rainy sunday, mellow jazz") and get a page of
+  songs from your library to play, shuffle or save as a playlist. The Tonearm server's AI picks them when it has one;
+  without it, the words are matched against your library's genres, artists and titles
+- **Daily mixes** (Home, with the Tonearm server 1.7.0 or later): up to three mixes a day from what you play, here
+  and on the phone
+- **Ctrl+K**: jump to any artist, album, playlist or song by typing part of its name; ↑/↓ and Enter open it (a song
+  plays)
+- **Mini player**: a small window that stays on top, with the song, a seek bar and previous / play / next. Its
+  button in the player bar opens it, and the main window goes to the tray (or the taskbar) meanwhile; ⤢ brings that
+  back. Drag it anywhere: it opens there next time
 - Back/forward like a browser: the mouse's side buttons, Alt+← / Alt+→ or the arrows at the top
 - Mouse-friendly rows: arrows at the edges of every horizontal row, a scrollbar under it, click-and-drag, Shift + wheel
 - Playback through **libmpv**: bit-perfect FLAC up to 32-bit/384 kHz, gapless, ReplayGain, Opus/AAC.
@@ -64,7 +77,8 @@ submodule).
 - **Player bar**: click the song to go back to where you started it, the artist for their page, right-click
   for the song's menu
 - Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
-- Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next (in a text field they move by word, as usual)
+- Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next (in a text field they move by word, as usual),
+  Ctrl+K to jump anywhere
 - **Media keys anywhere**: MPRIS on Linux, so the desktop's media keys and media controls (Plasma's widget,
   GNOME's, KDE Connect, `playerctl`) see and control the player; global hotkeys on Windows
 - **Close to tray**: closing the window leaves the music playing, with a tray icon to show or hide the window,

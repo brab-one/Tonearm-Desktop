@@ -127,6 +127,7 @@ fun DiscoverScreen(app: DesktopApp, nav: Navigator) {
             // The title has its own padding, like on the other screens.
             ScreenTitle("Discover", "ARTISTS AND ALBUMS YOU DON'T HAVE, FROM WHAT YOU PLAY")
             Column(Modifier.padding(horizontal = 28.dp)) {
+                MixPromptField(app, nav)
                 if (server?.discovery == true) DiscoveryPicksSection(app, nav)
                 if (server?.recommendations == true) AiPicksSection(app, nav, full = true)
                 if (server?.discovery != true && server?.recommendations != true) {

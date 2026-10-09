@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -91,6 +93,7 @@ import androidx.compose.ui.unit.sp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.desktop.MiniWindow
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 import io.github.deadeyebarb.tonearm.youtube.YtAlbum
@@ -117,6 +120,8 @@ sealed interface Screen {
     data object Lidarr : Screen
     data object Discover : Screen
     data class MoreLike(val like: MoreLikeSeed) : Screen
+    /** A mix made from a sentence ([prompt]), or one of today's daily mixes ([dailyId]). */
+    data class Mix(val prompt: String? = null, val dailyId: String? = null) : Screen
     data object Settings : Screen
 }
 
@@ -186,14 +191,19 @@ private val railItems = listOf(
     RailItem(Screen.Settings, "Settings", Icons.Rounded.Settings),
 )
 
+/**
+ * The main window's content. [quickOpen]: the quick switcher (Ctrl+K) is open, and [onQuickClose] closes it; [mini]
+ * is the mini player the player bar opens.
+ */
 @Composable
-fun TonearmApp(app: DesktopApp, nav: Navigator) {
+fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQuickClose: () -> Unit = {}, mini: MiniWindow? = null) {
     val hud = Hud.colors
     val config by app.config.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val ui = remember { UiState() }
     val states = rememberSaveableStateHolder()
     var queueOpen by remember { mutableStateOf(false) }
+    val quickPlaylists = remember { QuickPlaylists(app) }
     LaunchedEffect(Unit) { app.messages.collect { snackbar.showSnackbar(it) } }
     // What's started here remembers where, for the player bar to go back to.
     LaunchedEffect(nav) { app.player.origin = { nav.entry } }
@@ -239,7 +249,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
                             }
                         }
                     }
-                    PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen)
+                    PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen, mini = mini)
                 }
                 if (queueOpen) QueuePanel(app) { queueOpen = false }
             }
@@ -251,6 +261,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator) {
             )
         }
         Dialogs(app)
+        if (quickOpen && config.server != null) QuickSwitcher(app, nav, quickPlaylists, onQuickClose)
     }
     }
 }
@@ -274,6 +285,7 @@ private fun ScreenContent(app: DesktopApp, nav: Navigator, screen: Screen) {
         Screen.Lidarr -> LidarrScreen(app, nav)
         Screen.Discover -> DiscoverScreen(app, nav)
         is Screen.MoreLike -> MoreLikeScreen(app, nav, screen.like)
+        is Screen.Mix -> MixScreen(app, nav, screen.prompt, screen.dailyId)
         Screen.Settings -> SettingsScreen(app)
     }
 }
@@ -339,7 +351,7 @@ internal fun railTagline(server: ServerConfig?): String {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean) {
+private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queueOpen: Boolean, mini: MiniWindow?) {
     val hud = Hud.colors
     val ui = LocalUi.current
     val state by app.player.state.collectAsState()
@@ -416,42 +428,82 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                     }
                 }
             }
-            SeekBar(state) { app.player.seek(it) }
+            SeekBar(state, Modifier.widthIn(max = 516.dp).fillMaxWidth()) { app.player.seek(it) }
         }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        // Short of room (a small window, the queue open), a radio's chip is just its ∞, and the volume slider narrower
+        // or gone (the wheel still turns it).
+        BoxWithConstraints(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+        val roomy = maxWidth >= 330.dp
+        val slider = maxWidth >= 200.dp
+        Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            // With the queue open, its header has it.
+            if (!queueOpen) {
+                state.radio?.let { radio ->
+                    val stop = { app.player.setRadio(null) }
+                    if (roomy) RadioChip("∞ " + radio.title.uppercase(), stop, onClick = onQueue) else Tip(radio.title) { RadioChip("∞", stop, onClick = onQueue) }
+                    Spacer(Modifier.width(if (roomy) 12.dp else 8.dp))
+                }
+            }
             var dragging by remember { mutableStateOf<Float?>(null) }
             // The wheel turns it too, 5% a notch.
             val wheel = Modifier.onPointerEvent(PointerEventType.Scroll) { event ->
                 val notches = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                 if (notches != 0f) app.player.setVolume((state.volume - notches * 5).roundToInt().coerceIn(0, 100))
             }
-            Tip("Volume ${state.volume}%", wheel) {
+            Tip("Volume ${state.volume}%", wheel.weight(1f, fill = false)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
-                    Slider(
-                        value = dragging ?: (state.volume / 100f),
-                        onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
-                        onValueChangeFinished = { dragging = null },
-                        colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-                        modifier = Modifier.width(140.dp),
-                    )
+                    if (slider) {
+                        Slider(
+                            value = dragging ?: (state.volume / 100f),
+                            onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
+                            onValueChangeFinished = { dragging = null },
+                            colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
+                            modifier = Modifier.widthIn(max = 140.dp),
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(8.dp))
+            if (slider) Spacer(Modifier.width(8.dp))
+            if (mini != null) {
+                Tip(if (mini.open) "Close the mini player" else "Mini player") {
+                    IconButton(onClick = mini::toggle) { Icon(Icons.Rounded.PictureInPictureAlt, "Mini player", tint = if (mini.open) hud.accent else hud.dim) }
+                }
+            }
             Tip(if (queueOpen) "Hide the queue" else "Show the queue") {
                 IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
+            }
+        }
+        }
+    }
+}
+
+/** A radio plays ([label]): ✕ ends it (the queue stays and plays to its end). In the player bar a click shows the queue. */
+@Composable
+private fun RadioChip(label: String, onStop: () -> Unit, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    val hud = Hud.colors
+    val shape = MaterialTheme.shapes.extraSmall
+    Row(
+        modifier.clip(shape).background(hud.accent2.copy(alpha = 0.1f), shape).border(1.dp, hud.accent2.copy(alpha = 0.8f), shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(start = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1)
+        Tip("Stop the radio") {
+            IconButton(onClick = onStop, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Rounded.Close, "Stop the radio", tint = hud.accent2, modifier = Modifier.size(14.dp))
             }
         }
     }
 }
 
+/** Where the song is, with both times; dragging seeks. Narrower than [modifier] allows, the slider gives way so both times stay readable. */
 @Composable
-private fun SeekBar(state: PlayerState, onSeek: (Long) -> Unit) {
+internal fun SeekBar(state: PlayerState, modifier: Modifier, onSeek: (Long) -> Unit) {
     val hud = Hud.colors
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs
-    // At most as wide as it was meant to be; narrower, the slider gives way so both times stay readable.
-    Row(Modifier.widthIn(max = 516.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(formatDuration(((dragging?.times(duration))?.toLong() ?: state.positionMs) / 1000), style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.width(44.dp))
         Slider(
             value = dragging ?: if (duration > 0) (state.positionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f,
@@ -512,6 +564,7 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
                     "${count(state.queue.size, "SONG", "SONGS")} // ${formatDuration(state.queue.sumOf { it.duration ?: 0 }.toLong())}",
                     style = MaterialTheme.typography.labelSmall, color = hud.dim,
                 )
+                state.radio?.let { RadioChip("∞ " + it.title.uppercase(), onStop = { app.player.setRadio(null) }, Modifier.padding(top = 6.dp)) }
             }
             val ui = LocalUi.current
             Tip("Save as a playlist") {
@@ -533,6 +586,11 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(state.queue, key = { i, s -> "$i:${s.source}:${s.id}" }) { i, song ->
                     QueueRow(app, song, playing = i == state.index, onPlay = { app.player.jump(i) }, onRemove = { app.player.remove(i) })
+                }
+                if (state.fetchingMore) {
+                    item(key = "finding-more") {
+                        Text("Finding more…", style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    }
                 }
             }
             ListScrollbar(list)
