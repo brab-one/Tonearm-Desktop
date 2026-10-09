@@ -11,6 +11,7 @@ import io.github.deadeyebarb.tonearm.connect.AiPicks
 import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
 import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.connect.Played
+import io.github.deadeyebarb.tonearm.connect.DailyMixes
 import java.io.IOException
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -178,6 +179,28 @@ class DesktopApp {
         } catch (_: IOException) {
         }
     }
+
+    /** Today's daily mixes as last fetched: for which music server and user, and when. */
+    private class Daily(val server: String?, val at: Long, val mixes: DailyMixes)
+    @Volatile private var daily: Daily? = null
+
+    /**
+     * Today's daily mixes from the Tonearm server, kept for ten minutes; null when it doesn't make them. While it makes
+     * them (the first time each day) it's asked again every few seconds, and [onWaiting] hears about it.
+     */
+    suspend fun dailyMixes(onWaiting: (DailyMixes) -> Unit = {}): DailyMixes? {
+        keptDailyMixes()?.let { return it }
+        val session = sessions.current() ?: return null
+        val server = SavedQueue.serverOf(config.state.value.server)
+        val mixes = mixer.daily(session, onWaiting = onWaiting) ?: return null
+        if (!mixes.running) daily = Daily(server, System.currentTimeMillis(), mixes)
+        return mixes
+    }
+
+    /** The daily mixes fetched in the last ten minutes, for the music server in use; null when there are none. */
+    fun keptDailyMixes(): DailyMixes? = daily?.takeIf {
+        it.server == SavedQueue.serverOf(config.state.value.server) && System.currentTimeMillis() - it.at < DAILY_KEPT_MS
+    }?.mixes
 
     /** "Not for me": the Tonearm server leaves [artist] out of the picks from now on. */
     suspend fun dismiss(artist: String) {
@@ -408,5 +431,9 @@ class DesktopApp {
         } finally {
             shutDown.countDown()
         }
+    }
+
+    private companion object {
+        const val DAILY_KEPT_MS = 10 * 60_000L
     }
 }

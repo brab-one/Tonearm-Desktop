@@ -117,6 +117,8 @@ sealed interface Screen {
     data object Lidarr : Screen
     data object Discover : Screen
     data class MoreLike(val like: MoreLikeSeed) : Screen
+    /** A mix made from a sentence ([prompt]), or one of today's daily mixes ([dailyId]). */
+    data class Mix(val prompt: String? = null, val dailyId: String? = null) : Screen
     data object Settings : Screen
 }
 
@@ -274,6 +276,7 @@ private fun ScreenContent(app: DesktopApp, nav: Navigator, screen: Screen) {
         Screen.Lidarr -> LidarrScreen(app, nav)
         Screen.Discover -> DiscoverScreen(app, nav)
         is Screen.MoreLike -> MoreLikeScreen(app, nav, screen.like)
+        is Screen.Mix -> MixScreen(app, nav, screen.prompt, screen.dailyId)
         Screen.Settings -> SettingsScreen(app)
     }
 }

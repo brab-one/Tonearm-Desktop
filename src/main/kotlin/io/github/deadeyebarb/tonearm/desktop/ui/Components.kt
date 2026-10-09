@@ -349,9 +349,18 @@ fun SongRow(
     }
 }
 
-/** An album/artist card for grids: cover, title, subtitle. */
+/** An album/artist card for grids: cover, title, subtitle. [cover] draws another cover than [coverId]'s (a mix's). */
 @Composable
-fun CardItem(app: DesktopApp, coverId: String?, title: String, subtitle: String?, onClick: () -> Unit, round: Boolean = false, width: Dp = 168.dp) {
+fun CardItem(
+    app: DesktopApp,
+    coverId: String?,
+    title: String,
+    subtitle: String?,
+    onClick: () -> Unit,
+    round: Boolean = false,
+    width: Dp = 168.dp,
+    cover: (@Composable (Modifier) -> Unit)? = null,
+) {
     val hud = Hud.colors
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
@@ -359,11 +368,15 @@ fun CardItem(app: DesktopApp, coverId: String?, title: String, subtitle: String?
         Modifier.width(width).clip(MaterialTheme.shapes.medium).background(if (hovered) hud.panelHigh else Color.Transparent)
             .hoverable(hover).clickable(onClick = onClick).padding(8.dp),
     ) {
-        Cover(
-            app, coverId, Modifier.size(width - 16.dp).border(1.dp, if (hovered) hud.accent else hud.line, if (round) CircleShape else MaterialTheme.shapes.medium),
-            size = 300, shape = if (round) CircleShape else MaterialTheme.shapes.medium,
-            placeholder = if (round) Icons.Rounded.GraphicEq else Icons.Rounded.Album,
-        )
+        val frame = Modifier.size(width - 16.dp).border(1.dp, if (hovered) hud.accent else hud.line, if (round) CircleShape else MaterialTheme.shapes.medium)
+        if (cover != null) {
+            cover(frame)
+        } else {
+            Cover(
+                app, coverId, frame, size = 300, shape = if (round) CircleShape else MaterialTheme.shapes.medium,
+                placeholder = if (round) Icons.Rounded.GraphicEq else Icons.Rounded.Album,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = if (round) TextAlign.Center else TextAlign.Start, modifier = Modifier.fillMaxWidth())
         if (subtitle != null) {

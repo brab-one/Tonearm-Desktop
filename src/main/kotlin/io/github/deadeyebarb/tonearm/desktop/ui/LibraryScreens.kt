@@ -118,6 +118,7 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
                     }
                 }
             }
+            item(key = "daily-mixes") { DailyMixesRow(app, nav) }
             for ((type, albums) in lists) {
                 if (albums.isEmpty()) continue
                 item(key = type.name) {
