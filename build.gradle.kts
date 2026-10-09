@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "io.github.deadeyebarb.tonearm"
-version = "1.12.0"
+version = "1.12.1"
 
 kotlin {
     jvmToolchain(21)
@@ -78,7 +78,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "Tonearm"
-            packageVersion = "1.12.0"
+            packageVersion = "1.12.1"
             description = "Lossless Subsonic player with Lidarr and Brainarr"
             vendor = "Deadeyebarb"
             // jdk.security.auth and jdk.net: dbus-java's login on the session bus.
