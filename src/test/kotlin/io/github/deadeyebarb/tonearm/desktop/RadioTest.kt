@@ -111,4 +111,26 @@ class RadioTest {
         assertTrue(refills.done(next, found = true))
         assertFalse(refills.busy)
     }
+
+    @Test
+    fun `with nothing loaded only a radio that ran out asks, until a song loads or another queue starts`() {
+        var now = 1_000_000L
+        val refills = Refills { now }
+        // Stopped, or a queue put back after a restart: nothing is asked for until play.
+        assertFalse(refills.wants(left = 0, repeat = "off", radio = true, askedForThis = false, loaded = false))
+        assertFalse(refills.wants(left = 0, repeat = "off", radio = false, askedForThis = false, loaded = false))
+        // The radio's songs ran out before more came: it goes on asking, one request at a time, waiting after failures.
+        refills.ranOut = true
+        assertTrue(refills.wants(left = 0, repeat = "off", radio = true, askedForThis = true, loaded = false))
+        assertTrue(refills.done(refills.start(), found = false))
+        assertFalse(refills.wants(left = 0, repeat = "off", radio = true, askedForThis = true, loaded = false))
+        now += refills.retryInMs()
+        assertTrue(refills.wants(left = 0, repeat = "off", radio = true, askedForThis = true, loaded = false))
+        // Without a radio, "When the queue ends" asked on the last song already.
+        assertFalse(refills.wants(left = 0, repeat = "off", radio = false, askedForThis = false, loaded = false))
+        // Another queue, the radio stopped, or the queue emptied: it's over.
+        refills.reset()
+        assertFalse(refills.ranOut)
+        assertFalse(refills.wants(left = 0, repeat = "off", radio = true, askedForThis = true, loaded = false))
+    }
 }

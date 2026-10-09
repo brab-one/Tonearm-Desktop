@@ -370,7 +370,12 @@ class DesktopPlayer(
     override fun onProperty(name: String, value: Any?) = post {
         when (name) {
             "playlist-pos" -> onPlaylistPos((value as? Long)?.toInt() ?: -1)
-            "pause" -> _state.update { it.copy(playing = value == false && entries.isNotEmpty()) }
+            "pause" -> {
+                val was = _state.value.playing
+                _state.update { it.copy(playing = value == false && entries.isNotEmpty()) }
+                // Playing again: a radio's retry that came while paused asks now.
+                if (!was && _state.value.playing) maybeContinue()
+            }
             "time-pos" -> (value as? Double)?.let { seconds ->
                 val ms = (seconds * 1000).toLong()
                 heard?.let { if (ms > it.reachedMs) it.reachedMs = ms }
@@ -385,11 +390,16 @@ class DesktopPlayer(
             "paused-for-cache" -> _state.update { it.copy(buffering = value == true) }
             "idle-active" -> if (value == true) {
                 report()
+                // A radio's last song is over before more came (mpv goes idle at start and after a stop too, with
+                // nothing of ours loaded): it goes on asking, and what comes plays.
+                val s = _state.value
+                refills.ranOut = entries.isNotEmpty() && !stopped && s.radio != null && nextIndex(s.index, wrap = false) == null
                 entries.clear()
                 // A song that played to its end starts over when play is pressed.
                 val ended = _state.value.atEnd
                 _state.update { it.copy(playing = false, buffering = false, positionMs = if (ended) 0 else it.positionMs) }
                 if (ended) _seeks.tryEmit(0)
+                if (refills.ranOut) maybeContinue()
             }
             "audio-codec-name" -> _state.update { it.copy(codec = value as? String) }
             "audio-params/samplerate" -> _state.update { it.copy(sampleRate = (value as? Long)?.toInt()) }
@@ -464,6 +474,7 @@ class DesktopPlayer(
         scrobbledFor = if (restoredScrobbled == s.index && startMs > 0) s.index else -1
         restoredScrobbled = -1
         stopped = false
+        refills.ranOut = false
         _state.update { it.copy(positionMs = startMs, durationMs = (song.duration ?: 0) * 1000L, playing = true, buffering = true) }
         ensureNext()
     }
@@ -521,6 +532,7 @@ class DesktopPlayer(
         mpv.command("stop")
         entries.clear()
         stopped = true
+        refills.ranOut = false
         _state.update { it.copy(playing = false, positionMs = 0) }
     }
 
@@ -558,12 +570,14 @@ class DesktopPlayer(
 
     /**
      * Asks for more to play after the queue: on its last song (no repeat), once per song; while a radio plays, when
-     * a few are left, again a while after a try that brought nothing.
+     * a few are left, again a while after a try that brought nothing (when play is pressed, if it was paused), and on
+     * after its songs ran out.
      */
     private fun maybeContinue() {
         val s = _state.value
         val current = s.current ?: return
-        if (entries.isEmpty() || !refills.wants(left(s.index), s.repeat, s.radio != null, askedForThis = continuedAfter == s.index)) return
+        val loaded = entries.isNotEmpty()
+        if (!refills.wants(left(s.index), s.repeat, s.radio != null, askedForThis = continuedAfter == s.index, loaded = loaded)) return
         continuedAfter = s.index
         val radio = s.radio
         val ticket = refills.start()
@@ -581,7 +595,8 @@ class DesktopPlayer(
                     val wait = refills.retryInMs()
                     io.launch {
                         delay(wait)
-                        post { maybeContinue() }
+                        // Paused, it waits for play: a radio left paused overnight doesn't ask all night.
+                        post { if (entries.isEmpty() || _state.value.playing) maybeContinue() }
                     }
                 }
             }
