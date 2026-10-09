@@ -121,7 +121,7 @@ fun DailyMixesRow(app: DesktopApp, nav: Navigator) {
 /** A daily mix's card: opens its page; right-click plays it. */
 @Composable
 private fun MixCard(app: DesktopApp, nav: Navigator, mix: Mix) {
-    val songs = remember(mix) { mix.songs.map { it.toConnectSong() } }
+    val songs = rememberMixSongs(app, mix)
     MenuArea({ mixMenu(app, songs) }) {
         CardItem(app, null, mix.title, mix.subtitle, { nav.go(Screen.Mix(dailyId = mix.id)) }, cover = { MixCover(app, songs, it) })
     }
@@ -132,6 +132,16 @@ private fun mixMenu(app: DesktopApp, songs: List<ConnectSong>): List<MenuEntry> 
     MenuEntry("Shuffle") { app.player.play(songs, songs.indices.randomOrNull() ?: 0, shuffle = true) },
     MenuEntry("Add to queue") { app.player.enqueue(songs); app.message("Added ${count(songs.size, "song", "songs")} to the queue") },
 )
+
+/**
+ * A mix's songs as they show and play: without the ones disliked since it was made, here or on the phone (a daily mix
+ * is kept for a while, and a mix page stays open).
+ */
+@Composable
+private fun rememberMixSongs(app: DesktopApp, mix: Mix): List<ConnectSong> {
+    val disliked by app.dislikes.state.collectAsState()
+    return remember(mix, disliked) { mix.songs.filterNot { app.dislikes.isDisliked(it.artistLabel, it.title) }.map { it.toConnectSong() } }
+}
 
 /** A mix's cover: four of its albums' covers in a square, or one when there are fewer. */
 @Composable
@@ -247,7 +257,7 @@ private fun DailyMixPage(app: DesktopApp, nav: Navigator, id: String) {
 @Composable
 private fun MixPage(app: DesktopApp, mix: Mix, kind: String, subtitle: String?, note: String?, buttons: @Composable () -> Unit = {}) {
     val ui = LocalUi.current
-    val songs = remember(mix) { mix.songs.map { it.toConnectSong() } }
+    val songs = rememberMixSongs(app, mix)
     SongListPage(
         app,
         cover = { MixCover(app, songs, Modifier.size(220.dp).border(1.dp, Hud.colors.accent.copy(alpha = 0.5f), MaterialTheme.shapes.medium)) },

@@ -364,21 +364,22 @@ class DesktopApp {
         player.play(first.songs.map { it.toConnectSong() }, radio = seed)
     }
 
-    /** More for the [queue]: the [radio]'s next songs, or else "When the queue ends" (more of the same, or another playlist). */
+    /**
+     * More for the [queue]: the [radio]'s next songs, or else "When the queue ends" (more of the same, or another playlist).
+     * Never a song disliked, here or on the phone.
+     */
     private suspend fun continueQueue(current: ConnectSong, queue: List<ConnectSong>, radio: RadioSeed?): List<ConnectSong> {
         val cfg = config.state.value
         val session = sessions.current()
-        if (radio != null) return mixer.radio(session, radio, queue.map { it.toNextSong() }, cfg.playYouTube).songs.map { it.toConnectSong() }
         val played = queue.map(DesktopPlayer::key).toSet()
-        val next = when (cfg.whenQueueEnds) {
-            "similar" -> {
-                // A file on this computer has no similar songs on the server; YouTube Music's radio finds them.
-                continuation.similar(current.toNextSong().song, current.source == ConnectSong.YOUTUBE, session, played, cfg.playYouTube)
-            }
-            "playlist" -> session?.let { continuation.anotherPlaylist(it, played) }.orEmpty()
+        val next = when {
+            radio != null -> mixer.radio(session, radio, queue.map { it.toNextSong() }, cfg.playYouTube).songs
+            // A file on this computer has no similar songs on the server; YouTube Music's radio finds them.
+            cfg.whenQueueEnds == "similar" -> continuation.similar(current.toNextSong().song, current.source == ConnectSong.YOUTUBE, session, played, cfg.playYouTube)
+            cfg.whenQueueEnds == "playlist" -> session?.let { continuation.anotherPlaylist(it, played) }.orEmpty()
             else -> emptyList()
         }
-        return next.map { it.toConnectSong() }
+        return next.filterNot { dislikes.isDisliked(it.song.artistLabel, it.song.title) }.map { it.toConnectSong() }
     }
 
     private fun NextSong.toConnectSong() = if (youtube) song.toConnectSong(ConnectSong.YOUTUBE) else song.toConnectSong()
