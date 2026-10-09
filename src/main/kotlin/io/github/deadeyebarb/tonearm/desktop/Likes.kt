@@ -62,7 +62,7 @@ class DesktopLikes(
     suspend fun set(song: ConnectSong, like: Boolean) {
         when (song.source) {
             ConnectSong.SERVER -> {
-                val session = sessions.current() ?: return
+                val session = sessions.require()
                 api.setStarred(session, StarKind.SONG, song.id, like)
                 server.update { if (like) it + song.id else it - song.id }
             }

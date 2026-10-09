@@ -25,11 +25,13 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.OkHttpClient
+import java.io.IOException
 import java.nio.file.Files
 import java.util.Base64
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 /** The like button on YouTube Music songs: requested in Lidarr, liked once they're in the library. */
@@ -94,5 +96,14 @@ class LikesTest {
         }
         assertNotNull(request)
         assertEquals(listOf("Arrived is in your library now", request), synchronized(messages) { messages.toList() })
+    }
+
+    @Test
+    fun `liking a library song without a session says why`() = runBlocking {
+        // Tests leave the keyring alone (TONEARM_KEYRING=off): it never answers.
+        config.update { it.copy(server = it.server?.copy(secretEnc = "keyring:server-password")) }
+        val problem = assertFailsWith<IOException> { likes.set(ConnectSong("s1", ConnectSong.SERVER, "Arrived", "Band"), like = true) }
+        assertEquals("Couldn't read the server password from the keyring; is it unlocked?", problem.message)
+        assertEquals(emptySet(), likes.liked.value)
     }
 }

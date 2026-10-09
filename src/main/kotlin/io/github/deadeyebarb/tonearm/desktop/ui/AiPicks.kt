@@ -48,8 +48,10 @@ import io.github.deadeyebarb.tonearm.weekly.WeeklyState
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Albums the Tonearm server's AI (Ollama) suggests from what you play and like, by artists you don't have:
@@ -245,10 +247,11 @@ private fun WeeklyCard(app: DesktopApp, nav: Navigator) {
         waiting = app.weekly.waiting()
     }
     fun set(next: WeeklySettings) {
-        val session = app.sessions.current() ?: return
         busy = true
         scope.launch {
             app.attempt {
+                // Off the UI thread: the keyring may take its time.
+                val session = withContext(Dispatchers.IO) { app.sessions.require() }
                 app.weekly.saveSettings(session, next)
                 settings = next
                 if (next.on) app.lidarr.requireOrNull()?.let { (c, k) -> app.weekly.tick(c, k, session)?.let(app::message) }

@@ -232,7 +232,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                     ui.prompt = Prompt("Keep this playlist", "Name it", playlist.name.replace("Weekly picks", "Picks"), "Keep") { name ->
                                         app.scope.launch {
                                             app.attempt {
-                                                val session = app.sessions.current() ?: return@attempt
+                                                val session = app.sessions.require()
                                                 app.weekly.keep(session, WeeklyBatch(playlist, weekly), name)
                                                 app.message("Kept as “$name”, music included")
                                                 loader.reload()
