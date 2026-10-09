@@ -24,11 +24,13 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.OkHttpClient
+import java.io.IOException
 import java.nio.file.Files
 import java.util.Base64
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /** Placeholders moving into their playlists once their songs are in the library. */
 class PlaylistsTest {
@@ -141,5 +143,31 @@ class PlaylistsTest {
         lists.remove("A")
         playlists.resolve()
         assertEquals(mapOf("B" to listOf("Waiting" to "new2")), waiting())
+    }
+
+    @Test
+    fun `edits from rows shown before the last one went through change the songs they showed`() = runBlocking {
+        lists["C"] = listOf("c1", "c2", "c3", "c4", "c5", "c6")
+        // c3 goes, then c5 from where it was shown (index 4, which is c6 by now).
+        playlists.removeEntry("C", 2, "c3")
+        playlists.removeEntry("C", 4, "c5")
+        assertEquals(listOf("c1", "c2", "c4", "c6"), lists["C"])
+        // Moved up twice from the same row: twice up, not up and back.
+        playlists.move("C", 3, -1, "c6")
+        playlists.move("C", 3, -1, "c6")
+        assertEquals(listOf("c1", "c6", "c2", "c4"), lists["C"])
+        // A song that's gone meanwhile isn't mistaken for the one in its place.
+        assertFailsWith<IOException> { playlists.removeEntry("C", 1, "c3") }
+        assertFailsWith<IOException> { playlists.move("C", 1, 1, "c3") }
+        assertEquals(listOf("c1", "c6", "c2", "c4"), lists["C"])
+    }
+
+    @Test
+    fun `placeholders follow the song removed, wherever it is now`() = runBlocking {
+        lists["B"] = listOf("b0", "x", "b1")
+        playlists.removeEntry("B", 1, "x")
+        playlists.removeEntry("B", 2, "b1")
+        assertEquals(listOf("b0"), lists["B"])
+        assertEquals(listOf("Second" to "b0", "Waiting" to "b0"), waiting()["B"])
     }
 }

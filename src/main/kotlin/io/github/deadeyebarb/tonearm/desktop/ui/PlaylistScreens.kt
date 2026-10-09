@@ -283,9 +283,9 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                             onPlay = { playFrom(i) },
                             // Someone else's playlist can't be changed.
                             extraMenu = if (!mine) emptyList() else listOf(
-                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1); loader.reload() } } },
-                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1); loader.reload() } } },
-                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index); loader.reload() } } },
+                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1, item.song.id); loader.reload() } } },
+                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1, item.song.id); loader.reload() } } },
+                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index, item.song.id); loader.reload() } } },
                             ),
                         )
                     }

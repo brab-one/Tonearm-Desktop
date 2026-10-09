@@ -35,6 +35,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
+import kotlin.math.abs
 
 /** A song in a playlist that isn't in the library yet: it plays from YouTube Music until it is. */
 @Serializable
@@ -150,13 +151,15 @@ class DesktopPlaylists(
         added
     }
 
-    suspend fun removeEntry(playlistId: String, index: Int) = lock.withLock {
+    /** Removes the library song [songId], shown at [index]. */
+    suspend fun removeEntry(playlistId: String, index: Int, songId: String) = lock.withLock {
         val session = session()
         val entries = api.playlist(playlistId, session).entry
-        val removed = entries.getOrNull(index) ?: return@withLock
-        api.replacePlaylist(playlistId, entries.filterIndexed { i, _ -> i != index }.map { it.id }, session)
+        val at = locate(entries.map { it.id }, index, songId)
+        val removed = entries[at]
+        api.replacePlaylist(playlistId, entries.filterIndexed { i, _ -> i != at }.map { it.id }, session)
         // Placeholders anchored to the removed song move up to the one before it.
-        val before = entries.getOrNull(index - 1)?.id
+        val before = entries.getOrNull(at - 1)?.id
         val map = _pending.value.toMutableMap()
         map[playlistId] = map[playlistId].orEmpty().map { if (it.after == removed.id && entries.count { e -> e.id == removed.id } == 1) it.copy(after = before) else it }
         save(map)
@@ -168,15 +171,24 @@ class DesktopPlaylists(
         save(map)
     }
 
-    /** Moves a library song one place up or down. */
-    suspend fun move(playlistId: String, index: Int, by: Int) = lock.withLock {
+    /** Moves the library song [songId], shown at [index], one place up or down. */
+    suspend fun move(playlistId: String, index: Int, by: Int, songId: String) = lock.withLock {
         val session = session()
         val ids = api.playlist(playlistId, session).entry.map { it.id }.toMutableList()
-        val to = index + by
-        if (index !in ids.indices || to !in ids.indices) return@withLock
-        ids.add(to, ids.removeAt(index))
+        val from = locate(ids, index, songId)
+        val to = from + by
+        if (to !in ids.indices) return@withLock
+        ids.add(to, ids.removeAt(from))
         api.replacePlaylist(playlistId, ids, session)
     }
+
+    /**
+     * Where [songId], shown at [index], is in the server's playlist [ids] now. The rows shown may be older than the
+     * playlist (an edit made since, the reload still on its way): then it's the copy of that song nearest to [index].
+     */
+    private fun locate(ids: List<String>, index: Int, songId: String): Int =
+        if (ids.getOrNull(index) == songId) index
+        else ids.indices.filter { ids[it] == songId }.minByOrNull { abs(it - index) } ?: throw IOException("The playlist changed; try again")
 
     suspend fun rename(playlistId: String, name: String) = api.renamePlaylist(playlistId, name.trim(), session())
 
