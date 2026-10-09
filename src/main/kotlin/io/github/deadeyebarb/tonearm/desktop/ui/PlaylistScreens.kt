@@ -79,15 +79,16 @@ fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
     val ui = LocalUi.current
     var importing by remember { mutableStateOf(false) }
     val pending by app.playlists.pending.collectAsState()
-    // Changes reload it in place, without a spinner or losing the scroll.
-    val loader = rememberLoad(app.config.state.value.server?.baseUrl) { app.api.playlists() }
-    if (importing) ImportDialog(app, onDone = { playlistId -> importing = false; loader.reload(); playlistId?.let { nav.go(Screen.Playlist(it)) } })
+    // Changes, made here or anywhere else, reload it in place, without a spinner or losing the scroll.
+    val changes by app.playlists.changes.collectAsState()
+    val loader = rememberLoad(app.config.state.value.server?.baseUrl, reloadOn = changes) { app.playlists.list() }
+    if (importing) ImportDialog(app, onDone = { playlistId -> importing = false; playlistId?.let { nav.go(Screen.Playlist(it)) } })
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Playlists", (loader.state as? Load.Ready)?.value?.let { count(it.size, "PLAYLIST", "PLAYLISTS") }) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 HudButton("New playlist", {
                     ui.prompt = Prompt("New playlist", "Name", "", "Create") { name ->
-                        app.scope.launch { app.attempt { val p = app.playlists.create(name); loader.reload(); nav.go(Screen.Playlist(p.id)) } }
+                        app.scope.launch { app.attempt { val p = app.playlists.create(name); nav.go(Screen.Playlist(p.id)) } }
                     }
                 }, icon = Icons.AutoMirrored.Rounded.PlaylistAdd)
                 HudButton("Import", { importing = true }, icon = Icons.Rounded.Download, filled = false)
@@ -106,7 +107,7 @@ fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
                         items(playlists, key = { it.id }) { p ->
                             val waiting = pending[p.id].orEmpty().size
                             val weekly = WeeklyPicks.parse(p)
-                            MenuArea({ playlistMenu(app, nav, ui, p.id, p.name, app.owns(p)) { loader.reload() } }) {
+                            MenuArea({ playlistMenu(app, nav, ui, p.id, p.name, app.owns(p)) }) {
                                 CardItem(
                                     app, p.coverArt, p.name,
                                     listOfNotNull(
@@ -127,13 +128,16 @@ fun PlaylistsScreen(app: DesktopApp, nav: Navigator) {
     }
 }
 
-/** A playlist's menu. Only the owner can change a playlist: someone else's ([mine] false) can be copied instead. */
-private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: String, name: String, mine: Boolean, changed: () -> Unit): List<MenuEntry> = buildList {
+/**
+ * A playlist's menu. Only the owner can change a playlist: someone else's ([mine] false) can be copied instead. The
+ * pages showing playlists load them again after a change.
+ */
+private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: String, name: String, mine: Boolean): List<MenuEntry> = buildList {
     add(MenuEntry("Open") { nav.go(Screen.Playlist(id)) })
     if (mine) {
         add(MenuEntry("Rename…") {
             ui.prompt = Prompt("Rename playlist", "Name", name, "Rename") { new ->
-                app.scope.launch { app.attempt { app.playlists.rename(id, new); changed() } }
+                app.scope.launch { app.attempt { app.playlists.rename(id, new) } }
             }
         })
     } else {
@@ -142,7 +146,6 @@ private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: Strin
                 app.attempt {
                     val copy = app.playlists.create(name, app.api.playlist(id).entry.map { it.toConnectSong() })
                     app.message("Copied as “$name”")
-                    changed()
                     nav.go(Screen.Playlist(copy.id))
                 }
             }
@@ -152,7 +155,7 @@ private fun playlistMenu(app: DesktopApp, nav: Navigator, ui: UiState, id: Strin
     if (mine) {
         add(MenuEntry("Delete", danger = true) {
             ui.confirm = Confirm("Delete “$name”?", "The playlist goes from your server; the songs in it stay in your library. This can't be undone.", "Delete") {
-                app.scope.launch { app.attempt { app.playlists.delete(id); changed(); if (nav.current == Screen.Playlist(id)) nav.back() } }
+                app.scope.launch { app.attempt { app.playlists.delete(id); if (nav.current == Screen.Playlist(id)) nav.back() } }
             }
         })
     }
@@ -179,9 +182,11 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
     val scope = rememberCoroutineScope()
     val pendingMap by app.playlists.pending.collectAsState()
     val state by app.player.state.collectAsState()
-    // Edits reload it in place: the list stays where it was scrolled to, without a spinner.
+    // Edits, made here or anywhere else (a song added from the player bar), reload it in place: the list stays where it
+    // was scrolled to, without a spinner.
     val list = rememberLazyListState()
-    val loader = rememberLoad(id) {
+    val changes by app.playlists.changes.collectAsState()
+    val loader = rememberLoad(id, reloadOn = changes) {
         // Pick up songs that have arrived since.
         runCatching { app.playlists.resolve() }
         app.api.playlist(id)
@@ -253,7 +258,7 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                                 }, icon = Icons.Rounded.CloudDownload, filled = false)
                             }
                             HudButton("More like this", { scope.launch { app.attempt { moreLikePlaylist(app, nav, id, playlist.name) } } }, icon = Icons.Rounded.AutoAwesome, filled = false)
-                            MoreButton({ playlistMenu(app, nav, ui, id, playlist.name, mine) { loader.reload() } }, 40.dp)
+                            MoreButton({ playlistMenu(app, nav, ui, id, playlist.name, mine) }, 40.dp)
                         }
                     }
                 }
@@ -283,9 +288,9 @@ fun PlaylistScreen(app: DesktopApp, nav: Navigator, id: String) {
                             onPlay = { playFrom(i) },
                             // Someone else's playlist can't be changed.
                             extraMenu = if (!mine) emptyList() else listOf(
-                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1, item.song.id); loader.reload() } } },
-                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1, item.song.id); loader.reload() } } },
-                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index, item.song.id); loader.reload() } } },
+                                MenuEntry("Move up") { scope.launch { app.attempt { app.playlists.move(id, item.index, -1, item.song.id) } } },
+                                MenuEntry("Move down") { scope.launch { app.attempt { app.playlists.move(id, item.index, 1, item.song.id) } } },
+                                MenuEntry("Remove from playlist") { scope.launch { app.attempt { app.playlists.removeEntry(id, item.index, item.song.id) } } },
                             ),
                         )
                     }

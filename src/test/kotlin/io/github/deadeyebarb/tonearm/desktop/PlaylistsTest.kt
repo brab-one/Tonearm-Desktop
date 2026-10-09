@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop
 
 import io.github.deadeyebarb.tonearm.connect.ConnectClient
+import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.ConnectRouter
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
@@ -42,6 +43,8 @@ class PlaylistsTest {
     private val lists = mutableMapOf("A" to listOf("a1"), "B" to listOf("b1"))
     private val library = mutableMapOf("Arrived" to "new1", "Second" to "new2")
     private val failing = mutableSetOf<String>()
+    /** How often the playlists were listed. */
+    private var listed = 0
     private val server = MockWebServer().apply {
         dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = synchronized(this@PlaylistsTest) { answer(request) }
@@ -57,6 +60,11 @@ class PlaylistsTest {
             "/rest/search3.view" -> {
                 val hits = library.filterKeys { it in url.queryParameter("query").orEmpty() }.map { (title, id) -> song(id, title) }
                 ok(""","searchResult3":{"song":[${hits.joinToString(",")}]}""")
+            }
+            "/rest/getPlaylists.view" -> {
+                if ("getPlaylists" in failing) return MockResponse.Builder().code(503).build()
+                listed++
+                ok(""","playlists":{"playlist":[${lists.entries.joinToString(",") { (id, songs) -> """{"id":"$id","name":"$id","songCount":${songs.size}}""" }}]}""")
             }
             "/rest/getPlaylist.view" -> {
                 val id = url.queryParameter("id")!!
@@ -169,5 +177,38 @@ class PlaylistsTest {
         playlists.removeEntry("B", 2, "b1")
         assertEquals(listOf("b0"), lists["B"])
         assertEquals(listOf("Second" to "b0", "Waiting" to "b0"), waiting()["B"])
+    }
+
+    @Test
+    fun `every change is heard by the pages showing playlists, a failed one too`() = runBlocking {
+        val before = playlists.changes.value
+        playlists.add("A", listOf(ConnectSong("x1", ConnectSong.SERVER, "X")))
+        assertEquals(listOf("a1", "x1"), lists["A"])
+        assertEquals(before + 1, playlists.changes.value)
+        playlists.removeEntry("A", 1, "x1")
+        playlists.move("B", 0, 1, "b1")
+        assertEquals(before + 3, playlists.changes.value)
+        // It may have gone through before it failed: the pages look again.
+        failing += "createPlaylist A"
+        assertFailsWith<IOException> { playlists.add("A", listOf(ConnectSong("x2", ConnectSong.SERVER, "X"))) }
+        assertEquals(before + 4, playlists.changes.value)
+    }
+
+    @Test
+    fun `ctrl+k has the playlists listed last when the server can't be reached`() = runBlocking {
+        assertEquals(emptyList(), playlists.kept())
+        // Listed by a page (or at the start): Ctrl+K goes with those for a while.
+        assertEquals(listOf("A", "B"), playlists.list().map { it.name })
+        assertEquals(listOf("A", "B"), playlists.kept().map { it.name })
+        assertEquals(listOf("A", "B"), playlists.recent().map { it.name })
+        assertEquals(1, listed)
+        // After a change it lists them again; with the server gone, the ones it had.
+        lists["C"] = emptyList()
+        playlists.add("C", emptyList())
+        assertEquals(listOf("A", "B", "C"), playlists.recent().map { it.name })
+        assertEquals(2, listed)
+        failing += "getPlaylists"
+        playlists.add("C", emptyList())
+        assertEquals(listOf("A", "B", "C"), playlists.recent().map { it.name })
     }
 }

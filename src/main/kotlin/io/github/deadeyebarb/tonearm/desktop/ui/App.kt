@@ -203,7 +203,6 @@ fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQu
     val ui = remember { UiState() }
     val states = rememberSaveableStateHolder()
     var queueOpen by remember { mutableStateOf(false) }
-    val quickPlaylists = remember { QuickPlaylists(app) }
     LaunchedEffect(Unit) { app.messages.collect { snackbar.showSnackbar(it) } }
     // What's started here remembers where, for the player bar to go back to.
     LaunchedEffect(nav) { app.player.origin = { nav.entry } }
@@ -261,7 +260,7 @@ fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQu
             )
         }
         Dialogs(app)
-        if (quickOpen && config.server != null) QuickSwitcher(app, nav, quickPlaylists, onQuickClose)
+        if (quickOpen && config.server != null) QuickSwitcher(app, nav, onQuickClose)
     }
     }
 }

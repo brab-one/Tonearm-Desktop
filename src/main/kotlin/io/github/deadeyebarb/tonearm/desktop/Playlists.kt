@@ -1,5 +1,6 @@
 package io.github.deadeyebarb.tonearm.desktop
 
+import io.github.deadeyebarb.tonearm.desktop.player.SavedQueue
 import io.github.deadeyebarb.tonearm.integrations.SongRequestResult
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
@@ -10,6 +11,7 @@ import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
 import io.github.deadeyebarb.tonearm.likes.findSong
 import io.github.deadeyebarb.tonearm.subsonic.Playlist
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.Song
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApiException
@@ -23,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -79,6 +82,13 @@ class DesktopPlaylists(
     private val _pending = MutableStateFlow(load())
     val pending: StateFlow<Map<String, List<PendingTrack>>> = _pending.asStateFlow()
     private val lock = Mutex()
+    private val _changes = MutableStateFlow(0)
+    /** Goes up with every change to a playlist made here, from whichever page, so the pages showing playlists load them again. */
+    val changes: StateFlow<Int> = _changes.asStateFlow()
+
+    /** The playlists as the music server last gave them: for which server and user, when, and after which change. */
+    private class Listed(val server: String?, val at: Long, val changes: Int, val playlists: List<Playlist>)
+    @Volatile private var listed: Listed? = null
 
     private fun load(): Map<String, List<PendingTrack>> = runCatching { json.decodeFromString(serializer, file.readText()) }.getOrDefault(emptyMap())
 
@@ -93,6 +103,33 @@ class DesktopPlaylists(
     }
 
     private fun session() = sessions.require()
+
+    private fun changed() = _changes.update { it + 1 }
+
+    /** The music server's playlists. They're kept, for Ctrl+K while the server can't be reached. */
+    suspend fun list(): List<Playlist> {
+        val session = session()
+        val changes = _changes.value
+        return api.playlists(session).also { listed = Listed(SavedQueue.serverOf(session.config), System.currentTimeMillis(), changes, it) }
+    }
+
+    /** The playlists last listed for the music server in use (by any page, or at the start); empty when none were. */
+    fun kept(): List<Playlist> = keptFor(sessions.ready())?.playlists.orEmpty()
+
+    /** The playlists for Ctrl+K: listed again when the ones [kept] are over five minutes old or older than a change; kept ones when the server can't be reached. */
+    suspend fun recent(): List<Playlist> {
+        val kept = keptFor(sessions.current())
+        if (kept != null && kept.changes == _changes.value && System.currentTimeMillis() - kept.at < KEEP_MS) return kept.playlists
+        return try {
+            list()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            kept?.playlists.orEmpty()
+        }
+    }
+
+    private fun keptFor(session: ServerSession?): Listed? = listed?.takeIf { session != null && it.server == SavedQueue.serverOf(session.config) }
 
     /** The playlist's rows in order: library songs with their placeholders after them. */
     fun merged(playlist: Playlist, pending: List<PendingTrack> = _pending.value[playlist.id].orEmpty()): List<PlaylistItem> {
@@ -114,12 +151,12 @@ class DesktopPlaylists(
         val playlist = api.createPlaylist(name.trim(), emptyList(), session)
             ?: api.playlists(session).lastOrNull { it.name == name.trim() }
             ?: throw IOException("The music server didn't create the playlist")
-        if (songs.isNotEmpty()) add(playlist.id, songs)
+        if (songs.isNotEmpty()) add(playlist.id, songs) else changed()
         return playlist
     }
 
     /** Adds songs at the end; songs the library doesn't have become placeholders (YouTube Music). */
-    suspend fun add(playlistId: String, songs: List<ConnectSong>): Int = lock.withLock {
+    suspend fun add(playlistId: String, songs: List<ConnectSong>): Int = edit {
         val session = session()
         var ids = api.playlist(playlistId, session).entry.map { it.id }
         val map = _pending.value.toMutableMap()
@@ -151,8 +188,17 @@ class DesktopPlaylists(
         added
     }
 
+    /** One change at a time; the pages hear about it once it's done (or went wrong halfway). */
+    private suspend fun <T> edit(block: suspend () -> T): T = lock.withLock {
+        try {
+            block()
+        } finally {
+            changed()
+        }
+    }
+
     /** Removes the library song [songId], shown at [index]. */
-    suspend fun removeEntry(playlistId: String, index: Int, songId: String) = lock.withLock {
+    suspend fun removeEntry(playlistId: String, index: Int, songId: String) = edit {
         val session = session()
         val entries = api.playlist(playlistId, session).entry
         val at = locate(entries.map { it.id }, index, songId)
@@ -172,14 +218,15 @@ class DesktopPlaylists(
     }
 
     /** Moves the library song [songId], shown at [index], one place up or down. */
-    suspend fun move(playlistId: String, index: Int, by: Int, songId: String) = lock.withLock {
+    suspend fun move(playlistId: String, index: Int, by: Int, songId: String) = edit {
         val session = session()
         val ids = api.playlist(playlistId, session).entry.map { it.id }.toMutableList()
         val from = locate(ids, index, songId)
         val to = from + by
-        if (to !in ids.indices) return@withLock
-        ids.add(to, ids.removeAt(from))
-        api.replacePlaylist(playlistId, ids, session)
+        if (to in ids.indices) {
+            ids.add(to, ids.removeAt(from))
+            api.replacePlaylist(playlistId, ids, session)
+        }
     }
 
     /**
@@ -190,9 +237,9 @@ class DesktopPlaylists(
         if (ids.getOrNull(index) == songId) index
         else ids.indices.filter { ids[it] == songId }.minByOrNull { abs(it - index) } ?: throw IOException("The playlist changed; try again")
 
-    suspend fun rename(playlistId: String, name: String) = api.renamePlaylist(playlistId, name.trim(), session())
+    suspend fun rename(playlistId: String, name: String) = edit { api.renamePlaylist(playlistId, name.trim(), session()) }
 
-    suspend fun delete(playlistId: String) = lock.withLock {
+    suspend fun delete(playlistId: String) = edit {
         api.deletePlaylist(playlistId, session())
         save(_pending.value - playlistId)
     }
@@ -290,6 +337,7 @@ class DesktopPlaylists(
             save(_pending.value + (playlistId to remaining))
             moved += found.size
         }
+        if (moved > 0) changed()
         moved
     }
 
@@ -330,7 +378,7 @@ class DesktopPlaylists(
         source.tracks.zip(matches).forEach { (ref, song) ->
             if (song != null) anchor = song.id else waiting += PendingTrack(ref, after = anchor)
         }
-        lock.withLock {
+        edit {
             val map = _pending.value.toMutableMap()
             map[playlist.id] = waiting
             save(map)
@@ -339,6 +387,8 @@ class DesktopPlaylists(
     }
 
     fun start() {
+        // Listed once at the start, so Ctrl+K has them when the server goes away later.
+        scope.launch { runCatching { list() } }
         scope.launch {
             while (true) {
                 delay(15 * 60_000L)
@@ -354,5 +404,10 @@ class DesktopPlaylists(
             is PlaylistItem.Entry -> item.song.toConnectSong()
             is PlaylistItem.Pending -> playable(playlistId, item.track)
         }
+    }
+
+    private companion object {
+        /** How long Ctrl+K goes with the playlists last listed. */
+        const val KEEP_MS = 5 * 60_000L
     }
 }

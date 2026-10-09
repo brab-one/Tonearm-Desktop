@@ -372,7 +372,7 @@ fun Modifier.onEnter(action: () -> Unit) = onPreviewKeyEvent {
 @Composable
 private fun AddToPlaylistDialog(app: DesktopApp, songs: List<ConnectSong>, onDismiss: () -> Unit) {
     val hud = Hud.colors
-    val loader = rememberLoad(songs) { app.api.playlists() }
+    val loader = rememberLoad(songs) { app.playlists.list() }
     var newName by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     fun done(text: String) {

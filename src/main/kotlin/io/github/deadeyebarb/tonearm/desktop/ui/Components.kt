@@ -233,12 +233,13 @@ sealed interface Load<out T> {
 /** [last] is the value loaded last, also for earlier keys. */
 class Loader<T>(val state: Load<T>, val reload: () -> Unit, val last: T? = null)
 
+/** Loads anew when [keys] change; a change of [reloadOn] (a change made elsewhere) loads again in place, like [Loader.reload]. */
 @Composable
-fun <T> rememberLoad(vararg keys: Any?, load: suspend () -> T): Loader<T> {
+fun <T> rememberLoad(vararg keys: Any?, reloadOn: Int = 0, load: suspend () -> T): Loader<T> {
     var state by remember(*keys) { mutableStateOf<Load<T>>(Load.Loading) }
     var generation by remember(*keys) { mutableIntStateOf(0) }
     var last by remember { mutableStateOf<T?>(null) }
-    LaunchedEffect(*keys, generation) {
+    LaunchedEffect(*keys, generation, reloadOn) {
         state = try {
             Load.Ready(load().also { last = it })
         } catch (e: CancellationException) {

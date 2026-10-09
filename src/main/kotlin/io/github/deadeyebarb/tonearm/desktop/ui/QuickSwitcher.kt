@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
-import io.github.deadeyebarb.tonearm.desktop.player.SavedQueue
 import io.github.deadeyebarb.tonearm.integrations.Names
 import io.github.deadeyebarb.tonearm.subsonic.Playlist
 import io.github.deadeyebarb.tonearm.subsonic.SearchResult
@@ -132,46 +131,18 @@ object QuickRank {
     }
 }
 
-/** The quick switcher's playlists, kept five minutes; the last ones stay when the music server can't be reached. */
-class QuickPlaylists(private val app: DesktopApp) {
-    private var server: String? = null
-    private var at = 0L
-    private var playlists: List<Playlist> = emptyList()
-
-    suspend fun get(): List<Playlist> {
-        val now = System.currentTimeMillis()
-        val current = SavedQueue.serverOf(app.config.state.value.server)
-        if (current != server) playlists = emptyList()
-        if (current == server && now - at < KEEP_MS) return playlists
-        return try {
-            app.api.playlists().also {
-                playlists = it
-                server = current
-                at = now
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            playlists
-        }
-    }
-
-    private companion object {
-        const val KEEP_MS = 5 * 60_000L
-    }
-}
-
 /**
  * Ctrl+K: jump to an artist, album, playlist or song by typing part of its name. ↑/↓ choose, Enter opens (a song
  * plays), Esc or a click outside closes.
  */
 @Composable
-fun QuickSwitcher(app: DesktopApp, nav: Navigator, playlistsCache: QuickPlaylists, onClose: () -> Unit) {
+fun QuickSwitcher(app: DesktopApp, nav: Navigator, onClose: () -> Unit) {
     val hud = Hud.colors
     var query by remember { mutableStateOf("") }
     val q = query.trim()
-    var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
-    LaunchedEffect(Unit) { playlists = playlistsCache.get() }
+    // The ones the app listed last (any page, or at the start) right away, so they're there with the server unreachable too.
+    var playlists by remember { mutableStateOf(app.playlists.kept()) }
+    LaunchedEffect(Unit) { playlists = app.playlists.recent() }
     // Enter came before the library's answer for q: the best fit in it opens when it comes.
     var pendingEnter by remember { mutableStateOf(false) }
 
