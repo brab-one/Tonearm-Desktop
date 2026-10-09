@@ -78,27 +78,36 @@ class DesktopLikes(
                     return
                 }
                 pending.add(ref)
-                if (resolveNow().isNotEmpty()) return
+                // Other pending likes may arrive with it; this one is only done when it did.
+                resolveNow()
+                if (!pending.isLiked(ref)) return
                 syncSoon()
-                request(ref)
+                scope.launch { request(ref) }
             }
         }
     }
 
-    private fun request(ref: TrackRef) {
+    /** Asks Lidarr for the song's album; [quietly] (a retry in the background) says nothing when that fails. */
+    private suspend fun request(ref: TrackRef, quietly: Boolean = false) {
         if (!config.state.value.requestLikes || lidarr.current.value == null) return
-        scope.launch {
-            try {
-                val (c, k) = lidarr.require()
-                val result = requests.request(c, k, ref)
-                val album = result as? SongRequestResult.Album
-                pending.setRequest(ref, result.message, album?.title, album?.artist)
-                syncNow()
-                message(result.message)
-            } catch (e: Exception) {
-                message("Couldn't request ${ref.title}: ${e.userMessage()}")
-            }
+        try {
+            val (c, k) = lidarr.require()
+            val result = requests.request(c, k, ref)
+            val album = result as? SongRequestResult.Album
+            pending.setRequest(ref, result.message, album?.title, album?.artist)
+            syncNow()
+            message(result.message)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!quietly) message("Couldn't request ${ref.title}: ${e.userMessage()}")
         }
+    }
+
+    /** Requests the pending likes that never were (the request failed, or an older version skipped it), an hour after the like. */
+    private suspend fun requestForgotten() {
+        val hourAgo = System.currentTimeMillis() - 3_600_000L
+        for (like in pending.items.value.filter { it.request == null && it.likedAt < hourAgo }) request(like.ref, quietly = true)
     }
 
     /** Reloads what's starred on the server. */
@@ -109,7 +118,7 @@ class DesktopLikes(
     /** Likes on the server the pending songs that have arrived. */
     suspend fun resolveNow(): List<String> = resolving.withLock {
         if (pending.items.value.isEmpty()) return emptyList()
-        val session = sessions.current() ?: return emptyList()
+        val session = sessions.currentOrNull() ?: return emptyList()
         val found = runCatching { pending.resolve(api, session) }.getOrDefault(emptyList())
         server.update { it + found.map { s -> s.id } }
         if (found.isNotEmpty()) syncSoon()
@@ -135,9 +144,10 @@ class DesktopLikes(
             var round = 0
             while (true) {
                 syncNow()
-                if (sessions.current() != null && round++ % 5 == 0) {
+                if (sessions.currentOrNull() != null && round++ % 5 == 0) {
                     runCatching { refresh() }
                     runCatching { resolveNow() }
+                    requestForgotten()
                 }
                 delay(4 * 60_000L)
             }
