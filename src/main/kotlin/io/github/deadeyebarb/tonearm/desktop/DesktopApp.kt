@@ -39,6 +39,7 @@ import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.desktop.player.DesktopPlayer
 import io.github.deadeyebarb.tonearm.desktop.player.QueueStore
+import io.github.deadeyebarb.tonearm.desktop.player.SavedQueue
 import io.github.deadeyebarb.tonearm.desktop.player.StreamProxy
 import io.github.deadeyebarb.tonearm.integrations.IntegrationHttp
 import io.github.deadeyebarb.tonearm.integrations.LidarrClient
@@ -118,7 +119,7 @@ class DesktopApp {
 
     init {
         // Last time's queue, paused where it was.
-        queueStore.load()?.takeIf { it.playsWith(queueServer()) }?.let(player::restore)
+        queueStore.load()?.takeIf { it.playsWith(SavedQueue.serverOf(config.state.value.server)) }?.let(player::restore)
         // Saved a second after the queue changes, playback stops or a seek, every 30 s while it plays, and at exit.
         scope.launch(Dispatchers.IO) {
             merge(player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing) }.distinctUntilChanged().drop(1), player.seeks).collectLatest {
@@ -132,11 +133,8 @@ class DesktopApp {
         }
     }
 
-    /** Which music server a saved queue's songs are from: its address and user, which a config entry can change. */
-    private fun queueServer() = config.state.value.server?.let { it.baseUrl.trimEnd('/') + "|" + it.username }
-
     private fun saveQueue() {
-        runCatching { queueStore.save(player.saved(queueServer())) }
+        runCatching { queueStore.save(player.saved()) }
     }
 
     val connect = DesktopConnect(config, connectClient, tonearmServer, sessions, player, scope).also { it.start() }
@@ -187,13 +185,13 @@ class DesktopApp {
 
     /**
      * Dislikes [song] or takes that back. A disliked song isn't liked anymore, and when it's the one playing,
-     * the player moves on.
+     * the player moves on (or stops, when it was the last).
      */
     suspend fun setDisliked(song: ConnectSong, on: Boolean) {
         dislikes.set(song.artist.orEmpty(), song.title, song.album, on)
         if (!on) return
         val current = player.state.value.current
-        if (current != null && current.id == song.id && current.source == song.source) player.next()
+        if (current != null && current.id == song.id && current.source == song.source) player.skip()
         // The dislike is saved; not liking it anymore may fail on its own.
         if (likes.isLiked(song)) runCatching { likes.set(song, false) }
     }

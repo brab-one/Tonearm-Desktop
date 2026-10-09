@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop.player
 
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
+import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -30,13 +31,16 @@ data class SavedQueue(
     fun playsWith(server: String?): Boolean = this.server == server || songs.none { it.source == ConnectSong.SERVER }
 
     companion object {
+        /** The [server] label of a music server: its address and user, which a config entry can change. */
+        fun serverOf(config: ServerConfig?): String? = config?.let { it.baseUrl.trimEnd('/') + "|" + it.username }
+
         fun of(state: PlayerState, server: String?, order: List<Int> = emptyList(), scrobbled: Boolean = false) = SavedQueue(
             server = server,
             songs = state.queue,
             // The last song in play order may just have gone: the one before it, then.
             index = if (state.queue.isEmpty()) 0 else state.index.coerceIn(0, state.queue.lastIndex),
             // A song that played to its end starts over next time.
-            positionMs = if (state.durationMs > 0 && state.positionMs >= state.durationMs - 1_000) 0 else state.positionMs,
+            positionMs = if (state.atEnd) 0 else state.positionMs,
             shuffle = state.shuffle,
             repeat = state.repeat,
             order = order,

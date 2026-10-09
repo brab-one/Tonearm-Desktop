@@ -48,6 +48,9 @@ data class PlayerState(
     val from: Any? = null,
 ) {
     val current: ConnectSong? get() = queue.getOrNull(index)
+
+    /** Within a second of the end: the song played out (positions come a few times a second, never quite at the end). */
+    val atEnd: Boolean get() = durationMs > 0 && positionMs >= durationMs - 1_000
 }
 
 /**
@@ -81,6 +84,12 @@ class DesktopPlayer(
     private var nowPlayingSentFor = -1
     @Volatile private var scrobbledFor = -1
     private var continuedAfter = -1
+    /** The restored song was scrobbled before the restart: going on with it isn't a new play. */
+    private var restoredScrobbled = -1
+    /** Stopped on purpose (stop, or the song playing taken away): songs that come in later wait for play. */
+    private var stopped = false
+    /** Which music server the queue's songs are from ([SavedQueue.server]), as it was when the queue started. */
+    @Volatile private var queueServer: String? = null
     /** A seek or a song load of ours is under way: mpv's playback restart for it isn't news. */
     private var ownSeek = false
     /** mpv is gone (set on the player thread): what's still queued for the player is dropped. */
@@ -144,6 +153,9 @@ class DesktopPlayer(
         val start = index.coerceIn(queue.indices)
         _state.update { it.copy(queue = queue, index = start, shuffle = shuffle, error = null, from = from) }
         order = playOrder(queue.size, start, shuffle)
+        queueServer = SavedQueue.serverOf(config.state.value.server)
+        continuedAfter = -1
+        restoredScrobbled = -1
         loadCurrent(positionMs)
     }
 
@@ -157,6 +169,8 @@ class DesktopPlayer(
         // The saved play order when it fits the queue (a shuffled one goes on as it was), else a new one.
         order = saved.order.takeIf { it.sorted() == saved.songs.indices.toList() } ?: playOrder(saved.songs.size, saved.index, saved.shuffle)
         scrobbledFor = if (saved.scrobbled) saved.index else -1
+        restoredScrobbled = scrobbledFor
+        queueServer = saved.server
         mpv.set("loop-file", if (saved.repeat == "one") "inf" else "no")
         _state.update {
             it.copy(
@@ -178,16 +192,13 @@ class DesktopPlayer(
     fun resume() = post { if (entries.isEmpty()) loadCurrent(_state.value.positionMs) else mpv.set("pause", "no") }
     fun pause() = post { mpv.set("pause", "yes") }
 
-    fun next() = post {
+    fun next() = post { nextIndex(_state.value.index, wrap = true)?.let(::moveTo) }
+
+    /** Leaves the current song (it was disliked): the next one plays, or playback stops when nothing else would. */
+    fun skip() = post {
         val current = _state.value.index
-        val next = nextIndex(current, wrap = true) ?: return@post
-        if (entries.size == 2 && entries[1] == next) {
-            // Already prefetched by mpv.
-            mpv.command("playlist-next", "force")
-        } else {
-            _state.update { it.copy(index = next) }
-            loadCurrent(0)
-        }
+        val next = nextIndex(current, wrap = true)?.takeIf { it != current }
+        if (next != null) moveTo(next) else halt()
     }
 
     fun previous() = post {
@@ -208,8 +219,8 @@ class DesktopPlayer(
 
     fun seek(positionMs: Long) = post { seekNow(positionMs) }
 
-    /** The queue as [QueueStore] keeps it, with its play order and whether the current song was scrobbled. */
-    fun saved(server: String?): SavedQueue = _state.value.let { s -> SavedQueue.of(s, server, order, scrobbledFor == s.index && s.index >= 0) }
+    /** The queue as [QueueStore] keeps it, with its server, its play order and whether the current song was scrobbled. */
+    fun saved(): SavedQueue = _state.value.let { s -> SavedQueue.of(s, queueServer, order, scrobbledFor == s.index && s.index >= 0) }
 
     fun setVolume(volume: Int) = post {
         val v = volume.coerceIn(0, 100)
@@ -222,20 +233,17 @@ class DesktopPlayer(
         order = playOrder(s.queue.size, s.index.coerceAtLeast(0), enabled)
         _state.update { it.copy(shuffle = enabled) }
         ensureNext()
+        maybeContinue()
     }
 
     fun setRepeat(mode: String) = post {
         mpv.set("loop-file", if (mode == "one") "inf" else "no")
         _state.update { it.copy(repeat = mode) }
         ensureNext()
+        maybeContinue()
     }
 
-    fun stop() = post {
-        report()
-        mpv.command("stop")
-        entries.clear()
-        _state.update { it.copy(playing = false, positionMs = 0) }
-    }
+    fun stop() = post { halt() }
 
     /** Adds songs to the end of the queue. */
     fun enqueue(songs: List<ConnectSong>) = post { enqueueNow(songs) }
@@ -274,26 +282,39 @@ class DesktopPlayer(
         val s = _state.value
         if (index !in s.queue.indices) return@post
         if (index == s.index) {
-            // Removing what plays: move on first (or stop if it was the last).
-            val next = nextIndex(index, wrap = false)
-            if (next == null) {
-                mpv.command("stop")
-                entries.clear()
-            } else {
-                _state.update { it.copy(index = next) }
-                loadCurrent(0)
+            // Removing what plays: the song after it in play order takes over (repeat-one too; repeat-all wraps).
+            val pos = order.indexOf(index)
+            val next = order.getOrNull(pos + 1) ?: order.firstOrNull()?.takeIf { s.repeat == "all" && it != index }
+            when {
+                next == null -> {
+                    // It was the last: stopped, on the song before it (or any one left), at its start.
+                    halt()
+                    val rest = order.getOrNull(pos - 1) ?: order.firstOrNull { it != index } ?: -1
+                    _state.update { it.copy(index = rest, durationMs = (it.queue.getOrNull(rest)?.duration ?: 0) * 1000L) }
+                }
+                // Nothing loaded (stopped, or a restored queue): the next one waits for play.
+                entries.isEmpty() -> _state.update { it.copy(index = next, positionMs = 0, durationMs = (it.queue[next].duration ?: 0) * 1000L) }
+                else -> {
+                    _state.update { it.copy(index = next) }
+                    loadCurrent(0)
+                }
             }
         }
         if (entries.size == 2 && entries[1] == index) {
             mpv.command("playlist-remove", "1")
             entries.removeAt(1)
         }
+        // What was noted about the song taken out isn't about the one moving into its place.
+        if (scrobbledFor == index) scrobbledFor = -1
+        if (restoredScrobbled == index) restoredScrobbled = -1
+        if (continuedAfter == index) continuedAfter = -1
         order = order.filter { it != index }
         shiftIndices(from = index + 1, by = -1)
         _state.update { st ->
             st.copy(queue = st.queue.filterIndexed { i, _ -> i != index }, index = if (st.index > index) st.index - 1 else st.index)
         }
         ensureNext()
+        maybeContinue()
     }
 
     fun setReplayGain(enabled: Boolean) = post { mpv.set("replaygain", if (enabled) "track" else "no") }
@@ -333,7 +354,10 @@ class DesktopPlayer(
             "idle-active" -> if (value == true) {
                 report()
                 entries.clear()
-                _state.update { it.copy(playing = false, buffering = false) }
+                // A song that played to its end starts over when play is pressed.
+                val ended = _state.value.atEnd
+                _state.update { it.copy(playing = false, buffering = false, positionMs = if (ended) 0 else it.positionMs) }
+                if (ended) _seeks.tryEmit(0)
             }
             "audio-codec-name" -> _state.update { it.copy(codec = value as? String) }
             "audio-params/samplerate" -> _state.update { it.copy(sampleRate = (value as? Long)?.toInt()) }
@@ -347,13 +371,7 @@ class DesktopPlayer(
 
     override fun onFileLoaded() = post {
         _state.update { it.copy(buffering = false, error = null) }
-        val s = _state.value
-        val song = s.current ?: return@post
-        if (s.index != nowPlayingSentFor) {
-            nowPlayingSentFor = s.index
-            if (song.source == ConnectSong.SERVER) scrobble(song, submission = false)
-        }
-        maybeContinue()
+        songStarted()
     }
 
     override fun onPlaybackRestart() = post {
@@ -363,6 +381,16 @@ class DesktopPlayer(
         }
         // mpv went back by itself: repeat-one looping the song, or the queue wrapping round to it.
         val ms = mpv.get("time-pos")?.toDoubleOrNull()?.let { (it * 1000).toLong() } ?: return@post
+        val s = _state.value
+        val song = s.current
+        val h = heard
+        // Another loop of repeat-one is another play (the last loop got further than this).
+        if (s.repeat == "one" && song != null && h != null && h.song == song && ms < 1_000 && h.reachedMs - ms > 1_000) {
+            hearing(song, ms)
+            scrobbledFor = -1
+            nowPlayingSentFor = -1
+            songStarted()
+        }
         _state.update { it.copy(positionMs = ms) }
         _seeks.tryEmit(ms)
     }
@@ -400,7 +428,10 @@ class DesktopPlayer(
         entries.clear()
         entries += s.index
         nowPlayingSentFor = -1
-        scrobbledFor = -1
+        // Going on with a restored song that was scrobbled before the restart isn't a new play.
+        scrobbledFor = if (restoredScrobbled == s.index && startMs > 0) s.index else -1
+        restoredScrobbled = -1
+        stopped = false
         _state.update { it.copy(positionMs = startMs, durationMs = (song.duration ?: 0) * 1000L, playing = true, buffering = true) }
         ensureNext()
     }
@@ -415,12 +446,50 @@ class DesktopPlayer(
             }
         }
         val current = entries.firstOrNull() ?: return
-        if (current != _state.value.index) {
+        // The next song started (or the same one again: repeat-all on a one-song queue).
+        val started = pos > 0 || current != _state.value.index
+        if (started) {
             _state.value.queue.getOrNull(current)?.let { hearing(it, 0) }
             _state.update { it.copy(index = current, positionMs = 0, durationMs = (it.queue.getOrNull(current)?.duration ?: 0) * 1000L) }
             scrobbledFor = -1
+            nowPlayingSentFor = -1
         }
         ensureNext()
+        if (started) songStarted()
+    }
+
+    /**
+     * A song started playing: the server hears it's now playing, and the queue asks for more at its end. mpv's
+     * file-loaded and playlist-pos news come in either order, so both call this; it does each once per song.
+     */
+    private fun songStarted() {
+        val s = _state.value
+        val song = s.current ?: return
+        if (s.index != nowPlayingSentFor) {
+            nowPlayingSentFor = s.index
+            if (song.source == ConnectSong.SERVER) scrobble(song, submission = false)
+        }
+        maybeContinue()
+    }
+
+    /** Plays [index] now: mpv's prefetched entry when it's that one. */
+    private fun moveTo(index: Int) {
+        if (entries.size == 2 && entries[1] == index) {
+            // Already prefetched by mpv.
+            mpv.command("playlist-next", "force")
+        } else {
+            _state.update { it.copy(index = index) }
+            loadCurrent(0)
+        }
+    }
+
+    /** Stops on purpose, at the start of the current song. */
+    private fun halt() {
+        report()
+        mpv.command("stop")
+        entries.clear()
+        stopped = true
+        _state.update { it.copy(playing = false, positionMs = 0) }
     }
 
     /** [song] starts being heard (from [fromMs]); the one before is done. */
@@ -455,16 +524,29 @@ class DesktopPlayer(
     /** Files on this computer play from disk; the rest through the proxy. */
     private fun urlOf(song: ConnectSong) = if (song.source == ConnectSong.LOCAL) song.id else proxy.url(song)
 
-    /** On the last song (no repeat), asks for more to play after it, once per song. */
+    /** Playing the last song (no repeat), asks for more to play after it, once per song. */
     private fun maybeContinue() {
         val s = _state.value
         val last = s.current ?: return
-        if (s.repeat != "off" || continuedAfter == s.index || nextIndex(s.index, wrap = false) != null) return
+        if (entries.isEmpty() || s.repeat != "off" || continuedAfter == s.index || nextIndex(s.index, wrap = false) != null) return
         continuedAfter = s.index
         val played = s.queue.map { key(it) }.toSet()
         io.launch {
             val more = runCatching { onQueueEnd(last, played) }.getOrDefault(emptyList())
-            if (more.isNotEmpty()) post { if (nextIndex(_state.value.index, wrap = false) == null) enqueueNow(more) }
+            if (more.isNotEmpty()) post { appendAfter(last, more) }
+        }
+    }
+
+    /** Songs for after [last]: they go at the end, and play right away if it ended while they were looked for. */
+    private fun appendAfter(last: ConnectSong, more: List<ConnectSong>) {
+        val s = _state.value
+        // Still on that song (not another queue by now), with nothing after it yet.
+        if (s.current != last || nextIndex(s.index, wrap = false) != null) return
+        val ranOut = entries.isEmpty() && !stopped
+        enqueueNow(more)
+        if (ranOut) {
+            _state.update { it.copy(index = s.queue.size) }
+            loadCurrent(0)
         }
     }
 
@@ -495,6 +577,7 @@ class DesktopPlayer(
         for (i in entries.indices) if (entries[i] >= from) entries[i] += by
         if (nowPlayingSentFor >= from) nowPlayingSentFor += by
         if (scrobbledFor >= from) scrobbledFor += by
+        if (restoredScrobbled >= from) restoredScrobbled += by
         if (continuedAfter >= from) continuedAfter += by
     }
 
@@ -510,8 +593,12 @@ class DesktopPlayer(
     }
 
     private fun scrobble(song: ConnectSong, submission: Boolean) {
-        val session = sessions.current() ?: return
-        io.launch { runCatching { api.scrobble(session, song.id, System.currentTimeMillis(), submission) } }
+        val time = System.currentTimeMillis()
+        // Off the player thread: opening the session may wait for the keyring.
+        io.launch {
+            val session = sessions.currentOrNull() ?: return@launch
+            runCatching { api.scrobble(session, song.id, time, submission) }
+        }
     }
 
     companion object {

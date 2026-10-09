@@ -1,6 +1,7 @@
 package io.github.deadeyebarb.tonearm.desktop
 
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
+import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.config.SavedWindow
 import io.github.deadeyebarb.tonearm.desktop.player.PlayerState
 import io.github.deadeyebarb.tonearm.desktop.player.QueueStore
@@ -80,6 +81,23 @@ class TrayAndQueueTest {
         assertTrue(saved.playsWith("s"))
         assertFalse(saved.playsWith("other"))
         assertTrue(saved.copy(songs = songs.drop(1)).playsWith("other"))
+    }
+
+    @Test
+    fun `the last position mpv gives is a song's end, a song without a length has none`() {
+        // Positions come every 200 ms or so: the last one is a little short of the end.
+        assertTrue(PlayerState(queue = songs, index = 0, positionMs = 2_440, durationMs = 3_000).atEnd)
+        assertFalse(PlayerState(queue = songs, index = 0, positionMs = 1_500, durationMs = 3_000).atEnd)
+        assertFalse(PlayerState(queue = songs, index = 0, positionMs = 0, durationMs = 0).atEnd)
+    }
+
+    @Test
+    fun `a queue's server is its address and user, whatever the config entry is called`() {
+        val home = ServerConfig(name = "Home", baseUrl = "https://music.example/", username = "me")
+        assertEquals("https://music.example|me", SavedQueue.serverOf(home))
+        assertEquals(SavedQueue.serverOf(home), SavedQueue.serverOf(home.copy(name = "Other name", secretEnc = "file:eA==")))
+        assertFalse(SavedQueue.serverOf(home) == SavedQueue.serverOf(home.copy(username = "you")))
+        assertNull(SavedQueue.serverOf(null))
     }
 
     @Test
