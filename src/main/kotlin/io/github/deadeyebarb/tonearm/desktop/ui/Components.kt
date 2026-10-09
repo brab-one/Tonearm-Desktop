@@ -1,7 +1,11 @@
 package io.github.deadeyebarb.tonearm.desktop.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,9 +18,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,9 +31,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
@@ -70,9 +78,12 @@ import coil3.request.ImageRequest
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.Fetch
+import io.github.deadeyebarb.tonearm.subsonic.ServerSession
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Cover art: a server cover id (fetched through the server's mTLS client) or a YouTube Music URL. */
 @Composable
@@ -85,23 +96,29 @@ fun Cover(
     shape: Shape = MaterialTheme.shapes.small,
     placeholder: ImageVector = Icons.Rounded.Album,
 ) {
-    val request = remember(coverId, youtube, size) {
-        when {
-            coverId == null -> null
-            youtube || coverId.startsWith("https://") -> coverId
-            // A cover on this computer (local music).
-            coverId.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(coverId) -> java.io.File(coverId)
-            else -> app.sessions.current()?.let { session ->
-                // Cover URLs carry a fresh auth salt every time; key the caches by what the image is.
-                val key = "cover/${session.id}/$coverId/$size"
-                ImageRequest.Builder(PlatformContext.INSTANCE).data(session.coverUrl(coverId, size).toString())
-                    .memoryCacheKey(key).diskCacheKey(key).build()
-            }
+    // A server cover needs the session, and building one may wait for the keyring: never on the UI thread.
+    var request by remember(coverId, youtube, size) { mutableStateOf(coverId?.let { coverRequest(it, youtube, size, app.sessions.ready()) }) }
+    if (request == null && coverId != null) {
+        LaunchedEffect(coverId, youtube, size) {
+            // No session (the keyring didn't answer, a damaged certificate) leaves the placeholder.
+            request = withContext(Dispatchers.IO) { runCatching { app.sessions.current() }.getOrNull() }?.let { coverRequest(coverId, youtube, size, it) }
         }
     }
     Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
         Icon(placeholder, null, Modifier.fillMaxSize(0.4f), tint = Hud.colors.dim.copy(alpha = 0.45f))
-        if (request != null) AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        request?.let { AsyncImage(model = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+    }
+}
+
+/** What Coil loads for a cover: a URL, a file on this computer, or a server cover through [session] (null without one). */
+private fun coverRequest(coverId: String, youtube: Boolean, size: Int, session: ServerSession?): Any? = when {
+    youtube || coverId.startsWith("https://") -> coverId
+    // A cover on this computer (local music).
+    coverId.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(coverId) -> java.io.File(coverId)
+    else -> session?.let {
+        // Cover URLs carry a fresh auth salt every time; key the caches by what the image is.
+        val key = "cover/${it.id}/$coverId/$size"
+        ImageRequest.Builder(PlatformContext.INSTANCE).data(it.coverUrl(coverId, size).toString()).memoryCacheKey(key).diskCacheKey(key).build()
     }
 }
 
@@ -149,6 +166,25 @@ fun HudTag(text: String, color: Color = Hud.colors.accent, filled: Boolean = fal
         maxLines = 1,
         modifier = modifier.background(color.copy(alpha = if (filled) 0.9f else 0.1f), shape).border(1.dp, color.copy(alpha = 0.8f), shape)
             .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/** [text] in a small panel while the pointer rests on [content]: what an icon button does, or more than fits. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun Tip(text: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val hud = Hud.colors
+    TooltipArea(
+        tooltip = {
+            Text(
+                text, style = MaterialTheme.typography.bodySmall, color = hud.text,
+                modifier = Modifier.background(hud.panelHigh, MaterialTheme.shapes.extraSmall).border(1.dp, hud.line, MaterialTheme.shapes.extraSmall)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        },
+        modifier = modifier,
+        delayMillis = 500,
+        content = content,
     )
 }
 
@@ -325,7 +361,6 @@ fun CardItem(app: DesktopApp, coverId: String?, title: String, subtitle: String?
  */
 @Composable
 fun CardRow(modifier: Modifier = Modifier, content: LazyListScope.() -> Unit) {
-    val hud = Hud.colors
     val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val hover = remember { MutableInteractionSource() }
@@ -339,11 +374,7 @@ fun CardRow(modifier: Modifier = Modifier, content: LazyListScope.() -> Unit) {
                 .draggable(rememberDraggableState { delta -> state.dispatchRawDelta(-delta) }, Orientation.Horizontal),
             content = content,
         )
-        HorizontalScrollbar(
-            rememberScrollbarAdapter(state),
-            Modifier.align(Alignment.BottomStart).fillMaxWidth(),
-            style = LocalScrollbarStyle.current.copy(unhoverColor = hud.line, hoverColor = hud.accent.copy(alpha = 0.7f), thickness = 6.dp),
-        )
+        HorizontalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.BottomStart).fillMaxWidth(), style = hudScrollbar())
         if (hovered && state.canScrollBackward) {
             RowArrow(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Scroll left", Modifier.align(Alignment.CenterStart)) {
                 scope.launch { state.animateScrollBy(-width * 0.8f) }
@@ -356,6 +387,22 @@ fun CardRow(modifier: Modifier = Modifier, content: LazyListScope.() -> Unit) {
         }
     }
 }
+
+@Composable
+private fun hudScrollbar() = LocalScrollbarStyle.current.copy(unhoverColor = Hud.colors.line, hoverColor = Hud.colors.accent.copy(alpha = 0.7f), thickness = 6.dp)
+
+/** A scrollbar at the right edge of the Box a list is in, to see where you are and drag to jump. */
+@Composable
+fun BoxScope.ListScrollbar(state: LazyListState) =
+    VerticalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 4.dp), style = hudScrollbar())
+
+@Composable
+fun BoxScope.GridScrollbar(state: LazyGridState) =
+    VerticalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 4.dp), style = hudScrollbar())
+
+@Composable
+fun BoxScope.ColumnScrollbar(state: ScrollState) =
+    VerticalScrollbar(rememberScrollbarAdapter(state), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 4.dp), style = hudScrollbar())
 
 @Composable
 private fun RowArrow(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {

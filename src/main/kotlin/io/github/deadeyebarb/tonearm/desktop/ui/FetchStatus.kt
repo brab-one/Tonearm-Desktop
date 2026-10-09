@@ -9,6 +9,8 @@ import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.Fetch
 import io.github.deadeyebarb.tonearm.integrations.FetchState
 import io.github.deadeyebarb.tonearm.integrations.TrackRef
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Where a song from outside the library stands: in your library already, downloading in Lidarr, or
@@ -24,7 +26,8 @@ fun rememberFetchState(app: DesktopApp, song: ConnectSong, requested: Pair<Strin
     val artist = requested?.second ?: like?.requestedArtist
     val state by produceState<FetchState?>(null, song.id, song.title, activity, album) {
         val ref = like?.ref ?: TrackRef(song.title, song.artist.orEmpty(), song.album, song.duration, song.id.takeUnless { it.startsWith("pending:") })
-        value = app.fetches.stateOf(ref, album, artist, app.sessions.current())
+        // The session may wait for the keyring: not on the UI thread.
+        value = app.fetches.stateOf(ref, album, artist, withContext(Dispatchers.IO) { runCatching { app.sessions.current() }.getOrNull() })
             ?: if (album != null) FetchState(Fetch.REQUESTED) else null
     }
     return state

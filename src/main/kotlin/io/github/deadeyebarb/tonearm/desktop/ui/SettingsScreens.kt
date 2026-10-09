@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -35,23 +36,37 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.deadeyebarb.tonearm.data.ClientCert
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.data.TrustedCa
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
-import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
 import io.github.deadeyebarb.tonearm.desktop.config.SecretStore
 import io.github.deadeyebarb.tonearm.desktop.connect.DesktopConnect
 import io.github.deadeyebarb.tonearm.net.Certs
+import io.github.deadeyebarb.tonearm.net.ClientIdentity
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.io.IOException
+import java.net.URI
+import java.security.cert.X509Certificate
+import java.util.Properties
+import java.util.UUID
+
+/** This build's version, written into tonearm-version.properties by the Gradle build; "dev" without it. */
+internal val AppVersion: String by lazy {
+    runCatching {
+        Properties().apply { DesktopApp::class.java.getResourceAsStream("/tonearm-version.properties")!!.use(::load) }.getProperty("version")
+    }.getOrNull() ?: "dev"
+}
 
 private sealed interface TestState {
     data object Idle : TestState
@@ -77,7 +92,9 @@ fun SetupScreen(app: DesktopApp) {
 fun SettingsScreen(app: DesktopApp) {
     val config by app.config.state.collectAsState()
     val hud = Hud.colors
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp)) {
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 28.dp, vertical = 24.dp)) {
         Text("SETTINGS", style = MaterialTheme.typography.headlineMedium)
         Column(Modifier.widthIn(max = 640.dp)) {
             SectionHeader("Music server")
@@ -156,8 +173,10 @@ fun SettingsScreen(app: DesktopApp) {
             )
 
             SectionHeader("About")
-            Text("Tonearm desktop 1.3.0 · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
+            Text("Tonearm desktop $AppVersion · settings in ${AppDirs.config}", style = MaterialTheme.typography.bodySmall, color = hud.dim)
         }
+    }
+    ColumnScrollbar(scroll)
     }
 }
 
@@ -169,35 +188,46 @@ private fun ServerForm(app: DesktopApp, existing: ServerConfig?) {
     var password by remember(existing) { mutableStateOf("") }
     var certFile by remember(existing) { mutableStateOf<File?>(null) }
     var certPassword by remember(existing) { mutableStateOf("") }
+    var keepCert by remember(existing) { mutableStateOf(true) }
     var caFile by remember(existing) { mutableStateOf<File?>(null) }
+    var keepCa by remember(existing) { mutableStateOf(true) }
     var test by remember { mutableStateOf<TestState>(TestState.Idle) }
-    val hasCert = certFile != null || existing?.clientCert != null
+    // An earlier result says nothing about what's being changed.
+    fun edited() {
+        if (test != TestState.Running) test = TestState.Idle
+    }
 
-    Field(url, { url = it }, "Server address", "https://music.example.com", KeyboardType.Uri)
-    Field(user, { user = it }, "Username")
-    Field(password, { password = it }, if (existing != null) "Password (leave empty to keep)" else "Password", secret = true)
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-        HudButton("Client certificate (.p12)", { pickFile("Client certificate", "*.p12;*.pfx")?.let { certFile = it } }, filled = false)
-        Spacer(Modifier.width(12.dp))
-        Text(certFile?.name ?: existing?.clientCert?.label ?: "None (no mTLS)", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim)
-    }
-    if (certFile != null) Field(certPassword, { certPassword = it }, "Certificate password", secret = true)
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-        HudButton("Extra CA (.pem/.crt)", { pickFile("CA certificate", "*.pem;*.crt;*.cer")?.let { caFile = it } }, filled = false)
-        Spacer(Modifier.width(12.dp))
-        Text(caFile?.name ?: existing?.trustedCa?.label ?: "System CAs only", style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim)
-    }
+    Field(url, { url = it; edited() }, "Server address", "https://music.example.com", KeyboardType.Uri)
+    Field(user, { user = it; edited() }, "Username")
+    Field(password, { password = it; edited() }, if (existing != null) "Password (leave empty to keep)" else "Password", secret = true)
+    CertificateRow(
+        "Client certificate (.p12)", certFile?.name ?: existing?.clientCert?.label?.takeIf { keepCert }, "None (no mTLS)",
+        pick = { pickFile("Client certificate", "p12", "pfx")?.let { certFile = it; edited() } },
+        remove = { certFile = null; keepCert = false; edited() },
+    )
+    if (certFile != null) Field(certPassword, { certPassword = it; edited() }, "Certificate password", secret = true)
+    CertificateRow(
+        "Extra CA (.pem/.crt)", caFile?.name ?: existing?.trustedCa?.label?.takeIf { keepCa }, "System CAs only",
+        pick = { pickFile("CA certificate", "pem", "crt", "cer")?.let { caFile = it; edited() } },
+        remove = { caFile = null; keepCa = false; edited() },
+    )
     TestResult(test)
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 12.dp)) {
         HudButton(if (test == TestState.Running) "Connecting…" else "Test & save", {
             test = TestState.Running
             scope.launch {
                 test = try {
-                    val server = withContext(Dispatchers.IO) { buildServer(existing, url.trim(), user.trim(), password, certFile, certPassword, caFile) }
-                    val session = app.sessions.build(server)
-                    app.api.ping(session)
-                    app.config.update { it.copy(server = server) }
-                    TestState.Passed("Connected to ${server.baseUrl}" + if (hasCert) " with your client certificate" else "")
+                    val draft = withContext(Dispatchers.IO) {
+                        ServerDraft.read(existing, url.trim(), user.trim(), password, certFile, certPassword, keepCert, caFile, keepCa)
+                    }
+                    // Tried with everything in memory: the saved settings only change once it works.
+                    app.api.ping(app.sessions.build(draft.server, draft.password, draft.identity, draft.anchors))
+                    val server = withContext(Dispatchers.IO) { draft.save { saved -> app.config.update { it.copy(server = saved) } } }
+                    // Over plain http there's no TLS, so no certificate either.
+                    val withCert = draft.identity != null && server.baseUrl.startsWith("https:", ignoreCase = true)
+                    TestState.Passed("Connected to ${server.baseUrl}" + if (withCert) " with your client certificate" else "")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     TestState.Failed(e.userMessage())
                 }
@@ -206,30 +236,112 @@ private fun ServerForm(app: DesktopApp, existing: ServerConfig?) {
     }
 }
 
-/** Copies the certificate files next to the config and seals the secrets; keeps what isn't replaced. */
-private fun buildServer(existing: ServerConfig?, url: String, user: String, password: String, cert: File?, certPassword: String, ca: File?): ServerConfig {
-    val clientCert = if (cert != null) {
-        val bytes = cert.readBytes()
-        Certs.loadPkcs12(bytes, certPassword.toCharArray()) // Fails early on a wrong password.
-        AppDirs.writePrivate(File(AppDirs.config, "client.p12"), bytes)
-        ClientCert.Pkcs12File("client.p12", SecretStore.seal("client-certificate-password", certPassword), cert.name)
-    } else {
-        existing?.clientCert
+/** A certificate file: the one there is (or [none]), a button to pick another and one to go without. */
+@Composable
+private fun CertificateRow(button: String, label: String?, none: String, pick: () -> Unit, remove: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+        HudButton(button, pick, filled = false)
+        Spacer(Modifier.width(12.dp))
+        Text(label ?: none, style = MaterialTheme.typography.bodyMedium, color = Hud.colors.dim, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (label != null) TextButton(onClick = remove) { Text("REMOVE", style = MaterialTheme.typography.labelLarge, color = Hud.colors.dim) }
     }
-    val trusted = if (ca != null) {
-        val bytes = ca.readBytes()
-        Certs.parse(bytes)
-        AppDirs.writePrivate(File(AppDirs.config, "ca.pem"), bytes)
-        TrustedCa("ca.pem", ca.name)
-    } else {
-        existing?.trustedCa
+}
+
+/** A certificate file picked in the form: its name and what's in it. */
+internal class PickedFile(val name: String, val bytes: ByteArray)
+
+/**
+ * What the server form would save, read and checked but held in memory: the certificates loaded and the
+ * passwords known, for Test & save to connect with. Nothing on disk or in the keyring changes before [save].
+ */
+internal class ServerDraft private constructor(
+    /** The settings to test: the saved secret and certificate files where nothing new was given. */
+    val server: ServerConfig,
+    val password: String,
+    val identity: ClientIdentity?,
+    val anchors: List<X509Certificate>,
+    private val existing: ServerConfig?,
+    private val newPassword: String?,
+    private val newCert: Pair<PickedFile, String>?,
+    private val newCa: PickedFile?,
+) {
+    /**
+     * Saves the draft once it has passed its test: new certificate files and secrets go under names of their own, then
+     * [commit] switches the config to them, and only then are the ones they replace deleted. If anything fails on the
+     * way, what was written is taken back and the saved settings stay as they were.
+     */
+    fun save(
+        dir: File = AppDirs.config,
+        seal: (name: String, secret: String) -> String = SecretStore::seal,
+        forget: (String) -> Unit = SecretStore::forget,
+        commit: (ServerConfig) -> Unit,
+    ): ServerConfig {
+        val tag = UUID.randomUUID().toString().take(8)
+        val written = mutableListOf<File>()
+        val sealed = mutableListOf<String>()
+        fun write(name: String, bytes: ByteArray): String = File(dir, name).also { written += it; AppDirs.writePrivate(it, bytes) }.name
+        fun sealNew(name: String, secret: String): String = seal(name, secret).also { sealed += it }
+        val saved = try {
+            server.copy(
+                secretEnc = newPassword?.let { sealNew("server-password-$tag", it) } ?: server.secretEnc,
+                clientCert = newCert?.let { (file, password) ->
+                    ClientCert.Pkcs12File(write("client-$tag.p12", file.bytes), sealNew("client-certificate-password-$tag", password), file.name)
+                } ?: server.clientCert,
+                trustedCa = newCa?.let { TrustedCa(write("ca-$tag.pem", it.bytes), it.name) } ?: server.trustedCa,
+            ).also(commit)
+        } catch (e: Exception) {
+            written.forEach { it.delete() }
+            sealed.forEach(forget)
+            throw e
+        }
+        existing?.let { old ->
+            if (old.secretEnc != saved.secretEnc) forget(old.secretEnc)
+            (old.clientCert as? ClientCert.Pkcs12File)?.takeIf { it != saved.clientCert }?.let {
+                File(dir, it.fileName).delete()
+                forget(it.passwordEnc)
+            }
+            old.trustedCa?.takeIf { it != saved.trustedCa }?.let { File(dir, it.fileName).delete() }
+        }
+        return saved
     }
-    val secret = if (password.isNotEmpty()) SecretStore.seal("server-password", password) else existing?.secretEnc.orEmpty()
-    val name = runCatching { java.net.URI(url).host }.getOrNull() ?: url
-    return ServerConfig(
-        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
-        name = name, baseUrl = url.trimEnd('/'), username = user, secretEnc = secret, clientCert = clientCert, trustedCa = trusted,
-    ).also { DesktopSessions.clientFor(it, okhttp3.OkHttpClient()) }
+
+    companion object {
+        /**
+         * Reads the picked files and the saved secrets and checks the certificates, writing nothing. An empty [password]
+         * keeps the saved one; without a new [cert] the saved certificate stays unless not [keepCert], the same for [ca].
+         */
+        fun read(
+            existing: ServerConfig?, url: String, user: String, password: String,
+            cert: File?, certPassword: String, keepCert: Boolean, ca: File?, keepCa: Boolean,
+            dir: File = AppDirs.config,
+            open: (String) -> String? = SecretStore::read,
+        ): ServerDraft {
+            val newCert = cert?.let { PickedFile(it.name, it.readBytes()) }
+            val newCa = ca?.let { PickedFile(it.name, it.readBytes()) }
+            val savedCert = (existing?.clientCert as? ClientCert.Pkcs12File)?.takeIf { newCert == null && keepCert }
+            val savedCa = existing?.trustedCa?.takeIf { newCa == null && keepCa }
+            val identity = when {
+                newCert != null -> Certs.loadPkcs12(newCert.bytes, certPassword.toCharArray()) // Fails early on a wrong password.
+                savedCert != null -> {
+                    val saved = open(savedCert.passwordEnc) ?: throw IOException("Couldn't read the client certificate's password from the keyring; is it unlocked?")
+                    Certs.loadPkcs12(File(dir, savedCert.fileName).readBytes(), saved.toCharArray())
+                }
+                else -> null
+            }
+            val anchors = (newCa?.bytes ?: savedCa?.let { File(dir, it.fileName).readBytes() })?.let(Certs::parse).orEmpty()
+            val secret = password.ifEmpty {
+                existing?.let { open(it.secretEnc) ?: throw IOException("Couldn't read the password from the keyring; is it unlocked?") }.orEmpty()
+            }
+            val server = ServerConfig(
+                id = existing?.id ?: UUID.randomUUID().toString(),
+                name = runCatching { URI(url).host }.getOrNull() ?: url,
+                baseUrl = url.trimEnd('/'), username = user,
+                secretEnc = if (password.isEmpty()) existing?.secretEnc.orEmpty() else "",
+                clientCert = savedCert, trustedCa = savedCa,
+            )
+            return ServerDraft(server, secret, identity, anchors, existing, password.ifEmpty { null }, newCert?.let { it to certPassword }, newCa)
+        }
+    }
 }
 
 @Composable
@@ -293,9 +405,14 @@ private fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: 
     }
 }
 
-private fun pickFile(title: String, pattern: String): File? {
+/**
+ * A file dialog for files with one of [extensions]. GTK only filters through a FilenameFilter (it takes a wildcard
+ * name for a file name); Windows ignores that one and filters by the wildcard name.
+ */
+private fun pickFile(title: String, vararg extensions: String): File? {
     val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD).apply {
-        file = pattern
+        setFilenameFilter { _, name -> extensions.any { name.endsWith(".$it", ignoreCase = true) } }
+        if (AppDirs.isWindows) file = extensions.joinToString(";") { "*.$it" }
         isVisible = true
     }
     return dialog.files.firstOrNull()

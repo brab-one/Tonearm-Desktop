@@ -41,6 +41,21 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
 }
 
+tasks.processResources {
+    // Settings → About shows this build's version.
+    val version = project.version.toString()
+    inputs.property("version", version)
+    filesMatching("tonearm-version.properties") { expand("version" to version) }
+}
+
+tasks.test {
+    // Tests never touch the real settings, cache or keyring.
+    val home = layout.buildDirectory.dir("test-home").get().asFile
+    environment("XDG_CONFIG_HOME", home.resolve("config").path)
+    environment("XDG_CACHE_HOME", home.resolve("cache").path)
+    environment("TONEARM_KEYRING", "off")
+}
+
 // The Windows build's classpath, made on Linux: Skia's Windows runtime instead of this machine's.
 val windowsRuntime by configurations.creating {
     extendsFrom(configurations.runtimeClasspath.get())
@@ -78,7 +93,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "Tonearm"
-            packageVersion = "1.12.1"
+            packageVersion = project.version.toString()
             description = "Lossless Subsonic player with Lidarr and Brainarr"
             vendor = "Deadeyebarb"
             // jdk.security.auth and jdk.net: dbus-java's login on the session bus.
