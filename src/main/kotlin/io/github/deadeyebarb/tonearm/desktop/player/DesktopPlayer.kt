@@ -4,10 +4,12 @@ import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopSessions
 import io.github.deadeyebarb.tonearm.desktop.config.AudioSettings
 import io.github.deadeyebarb.tonearm.desktop.config.ConfigStore
+import io.github.deadeyebarb.tonearm.mixes.RadioSeed
 import io.github.deadeyebarb.tonearm.subsonic.SubsonicApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -46,6 +48,10 @@ data class PlayerState(
     val error: String? = null,
     /** Where the queue was started from (the UI's place to go back to), null when another device started it. */
     val from: Any? = null,
+    /** The radio this queue is: it never ends, more is added as it plays. Null for any other queue. */
+    val radio: RadioSeed? = null,
+    /** The radio is looking for more songs. */
+    val fetchingMore: Boolean = false,
 ) {
     val current: ConnectSong? get() = queue.getOrNull(index)
 
@@ -63,8 +69,11 @@ class DesktopPlayer(
     private val api: SubsonicApi,
     private val sessions: DesktopSessions,
     private val config: ConfigStore,
-    /** Songs to append when the last one starts ("When the queue ends"); gets the played song keys. */
-    private val onQueueEnd: suspend (last: ConnectSong, played: Set<String>) -> List<ConnectSong> = { _, _ -> emptyList() },
+    /**
+     * Songs to append: when the last one starts ("When the queue ends"), or a few songs ahead while a radio plays.
+     * Gets the song playing, the whole queue and the radio.
+     */
+    private val onQueueEnd: suspend (current: ConnectSong, queue: List<ConnectSong>, radio: RadioSeed?) -> List<ConnectSong> = { _, _, _ -> emptyList() },
     /** Every song heard, skipped ones too: when it started and how far it got (for the listening history). */
     private val onPlayed: (song: ConnectSong, startedAt: Long, listenedMs: Long, durationMs: Long) -> Unit = { _, _, _, _ -> },
 ) : Mpv.Listener {
@@ -84,6 +93,7 @@ class DesktopPlayer(
     private var nowPlayingSentFor = -1
     @Volatile private var scrobbledFor = -1
     private var continuedAfter = -1
+    private val refills = Refills()
     /** The restored song was scrobbled before the restart: going on with it isn't a new play. */
     private var restoredScrobbled = -1
     /** Stopped on purpose (stop, or the song playing taken away): songs that come in later wait for play. */
@@ -148,15 +158,30 @@ class DesktopPlayer(
 
     // --- Commands (any thread) -----------------------------------------------------------------
 
-    fun play(queue: List<ConnectSong>, index: Int = 0, positionMs: Long = 0, shuffle: Boolean = false, from: Any? = origin()) = post {
+    /** Plays [queue]; with a [radio] it goes on endlessly (in order, without repeat), and without one a radio ends. */
+    fun play(queue: List<ConnectSong>, index: Int = 0, positionMs: Long = 0, shuffle: Boolean = false, from: Any? = origin(), radio: RadioSeed? = null) = post {
         if (queue.isEmpty()) return@post
         val start = index.coerceIn(queue.indices)
-        _state.update { it.copy(queue = queue, index = start, shuffle = shuffle, error = null, from = from) }
+        if (radio != null) mpv.set("loop-file", "no")
+        _state.update {
+            it.copy(
+                queue = queue, index = start, shuffle = shuffle, error = null, from = from, radio = radio, fetchingMore = false,
+                repeat = if (radio != null) "off" else it.repeat,
+            )
+        }
         order = playOrder(queue.size, start, shuffle)
         queueServer = SavedQueue.serverOf(config.state.value.server)
         continuedAfter = -1
         restoredScrobbled = -1
+        refills.reset()
         loadCurrent(positionMs)
+    }
+
+    /** Starts or ends the radio of the queue playing. Ended, the queue plays to its end, then "When the queue ends" applies. */
+    fun setRadio(radio: RadioSeed?) = post {
+        _state.update { it.copy(radio = radio, fetchingMore = false) }
+        refills.reset()
+        maybeContinue()
     }
 
     /**
@@ -175,7 +200,7 @@ class DesktopPlayer(
         _state.update {
             it.copy(
                 queue = saved.songs, index = saved.index, positionMs = saved.positionMs, durationMs = (song.duration ?: 0) * 1000L,
-                shuffle = saved.shuffle, repeat = saved.repeat, from = null,
+                shuffle = saved.shuffle, repeat = saved.repeat, from = null, radio = saved.radio,
             )
         }
     }
@@ -228,10 +253,12 @@ class DesktopPlayer(
         config.update { it.copy(volume = v) }
     }
 
+    /** Shuffle on ends a radio: it plays in the order it comes. */
     fun setShuffle(enabled: Boolean) = post {
         val s = _state.value
         order = playOrder(s.queue.size, s.index.coerceAtLeast(0), enabled)
-        _state.update { it.copy(shuffle = enabled) }
+        _state.update { it.copy(shuffle = enabled, radio = if (enabled) null else it.radio, fetchingMore = if (enabled) false else it.fetchingMore) }
+        if (enabled && s.radio != null) refills.reset()
         ensureNext()
         maybeContinue()
     }
@@ -524,25 +551,53 @@ class DesktopPlayer(
     /** Files on this computer play from disk; the rest through the proxy. */
     private fun urlOf(song: ConnectSong) = if (song.source == ConnectSong.LOCAL) song.id else proxy.url(song)
 
-    /** Playing the last song (no repeat), asks for more to play after it, once per song. */
+    /**
+     * Asks for more to play after the queue: on its last song (no repeat), once per song; while a radio plays, when
+     * a few are left, again a while after a try that brought nothing.
+     */
     private fun maybeContinue() {
         val s = _state.value
-        val last = s.current ?: return
-        if (entries.isEmpty() || s.repeat != "off" || continuedAfter == s.index || nextIndex(s.index, wrap = false) != null) return
+        val current = s.current ?: return
+        if (entries.isEmpty() || !refills.wants(left(s.index), s.repeat, s.radio != null, askedForThis = continuedAfter == s.index)) return
         continuedAfter = s.index
-        val played = s.queue.map { key(it) }.toSet()
+        val radio = s.radio
+        val ticket = refills.start()
+        if (radio != null) _state.update { it.copy(fetchingMore = true) }
         io.launch {
-            val more = runCatching { onQueueEnd(last, played) }.getOrDefault(emptyList())
-            if (more.isNotEmpty()) post { appendAfter(last, more) }
+            val more = runCatching { onQueueEnd(current, s.queue, radio) }.getOrDefault(emptyList())
+            post {
+                // Another queue by now, or the radio stopped: this was for that one.
+                if (!refills.done(ticket, found = more.isNotEmpty())) return@post
+                if (radio == null) return@post appendAfter(current, more)
+                _state.update { it.copy(fetchingMore = false) }
+                if (more.isNotEmpty()) {
+                    append(more)
+                } else {
+                    val wait = refills.retryInMs()
+                    io.launch {
+                        delay(wait)
+                        post { maybeContinue() }
+                    }
+                }
+            }
         }
     }
 
-    /** Songs for after [last]: they go at the end, and play right away if it ended while they were looked for. */
+    /** Songs after [index] in play order (repeat aside). */
+    private fun left(index: Int): Int = order.indexOf(index).let { if (it < 0) 0 else order.size - 1 - it }
+
+    /** Songs for after [last]: only while it's still playing with nothing after it (else the user's own came first). */
     private fun appendAfter(last: ConnectSong, more: List<ConnectSong>) {
         val s = _state.value
-        // Still on that song (not another queue by now), with nothing after it yet.
         if (s.current != last || nextIndex(s.index, wrap = false) != null) return
-        val ranOut = entries.isEmpty() && !stopped
+        append(more)
+    }
+
+    /** Songs at the end of the queue; when it ran out while they were looked for, the first of them plays. */
+    private fun append(more: List<ConnectSong>) {
+        if (more.isEmpty()) return
+        val s = _state.value
+        val ranOut = entries.isEmpty() && !stopped && nextIndex(s.index, wrap = false) == null
         enqueueNow(more)
         if (ranOut) {
             _state.update { it.copy(index = s.queue.size) }

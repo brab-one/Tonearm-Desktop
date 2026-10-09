@@ -3,6 +3,7 @@ package io.github.deadeyebarb.tonearm.desktop.player
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.data.ServerConfig
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
+import io.github.deadeyebarb.tonearm.mixes.RadioSeed
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -26,6 +27,8 @@ data class SavedQueue(
     val order: List<Int> = emptyList(),
     /** The current song was scrobbled already: going on with it doesn't scrobble it twice. */
     val scrobbled: Boolean = false,
+    /** The radio the queue is, so it goes on endlessly after a restart too. */
+    val radio: RadioSeed? = null,
 ) {
     /** Whether it can play with [server] configured: server songs only play from the server they're from. */
     fun playsWith(server: String?): Boolean = this.server == server || songs.none { it.source == ConnectSong.SERVER }
@@ -45,6 +48,7 @@ data class SavedQueue(
             repeat = state.repeat,
             order = order,
             scrobbled = scrobbled,
+            radio = state.radio,
         )
     }
 }

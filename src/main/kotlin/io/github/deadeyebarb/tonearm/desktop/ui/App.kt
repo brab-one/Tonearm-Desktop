@@ -419,13 +419,21 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
             SeekBar(state) { app.player.seek(it) }
         }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            // With the queue open, its header has it.
+            if (!queueOpen) {
+                state.radio?.let { radio ->
+                    RadioChip(radio.title, onStop = { app.player.setRadio(null) }, onClick = onQueue)
+                    Spacer(Modifier.width(12.dp))
+                }
+            }
             var dragging by remember { mutableStateOf<Float?>(null) }
             // The wheel turns it too, 5% a notch.
             val wheel = Modifier.onPointerEvent(PointerEventType.Scroll) { event ->
                 val notches = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                 if (notches != 0f) app.player.setVolume((state.volume - notches * 5).roundToInt().coerceIn(0, 100))
             }
-            Tip("Volume ${state.volume}%", wheel) {
+            // Narrower when the bar is short of room (a radio's chip, a small window).
+            Tip("Volume ${state.volume}%", wheel.weight(1f, fill = false)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
                     Slider(
@@ -433,13 +441,32 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                         onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
                         onValueChangeFinished = { dragging = null },
                         colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-                        modifier = Modifier.width(140.dp),
+                        modifier = Modifier.widthIn(max = 140.dp),
                     )
                 }
             }
             Spacer(Modifier.width(8.dp))
             Tip(if (queueOpen) "Hide the queue" else "Show the queue") {
                 IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
+            }
+        }
+    }
+}
+
+/** A radio plays: ✕ ends it (the queue stays and plays to its end). In the player bar a click shows the queue. */
+@Composable
+private fun RadioChip(title: String, onStop: () -> Unit, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    val hud = Hud.colors
+    val shape = MaterialTheme.shapes.extraSmall
+    Row(
+        modifier.clip(shape).background(hud.accent2.copy(alpha = 0.1f), shape).border(1.dp, hud.accent2.copy(alpha = 0.8f), shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(start = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("∞ " + title.uppercase(), style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1)
+        Tip("Stop the radio") {
+            IconButton(onClick = onStop, modifier = Modifier.size(24.dp)) {
+                Icon(Icons.Rounded.Close, "Stop the radio", tint = hud.accent2, modifier = Modifier.size(14.dp))
             }
         }
     }
@@ -512,6 +539,7 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
                     "${count(state.queue.size, "SONG", "SONGS")} // ${formatDuration(state.queue.sumOf { it.duration ?: 0 }.toLong())}",
                     style = MaterialTheme.typography.labelSmall, color = hud.dim,
                 )
+                state.radio?.let { RadioChip(it.title, onStop = { app.player.setRadio(null) }, Modifier.padding(top = 6.dp)) }
             }
             val ui = LocalUi.current
             Tip("Save as a playlist") {
@@ -533,6 +561,11 @@ private fun QueuePanel(app: DesktopApp, onClose: () -> Unit) {
             LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
                 itemsIndexed(state.queue, key = { i, s -> "$i:${s.source}:${s.id}" }) { i, song ->
                     QueueRow(app, song, playing = i == state.index, onPlay = { app.player.jump(i) }, onRemove = { app.player.remove(i) })
+                }
+                if (state.fetchingMore) {
+                    item(key = "finding-more") {
+                        Text("Finding more…", style = MaterialTheme.typography.bodySmall, color = hud.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    }
                 }
             }
             ListScrollbar(list)

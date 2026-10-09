@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Shuffle
@@ -109,9 +110,12 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
                     Text("WELCOME BACK", style = MaterialTheme.typography.labelMedium, color = Hud.colors.accent)
                     Text(config.server?.name ?: "Your library", style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.height(14.dp))
-                    HudButton("Shuffle all", {
-                        scope.launch { app.attempt { app.player.play(app.api.randomSongs(200).map { it.toConnectSong() }) } }
-                    }, icon = Icons.Rounded.Shuffle)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HudButton("Shuffle all", {
+                            scope.launch { app.attempt { app.player.play(app.api.randomSongs(200).map { it.toConnectSong() }) } }
+                        }, icon = Icons.Rounded.Shuffle)
+                        PicksRadioButton(app)
+                    }
                 }
             }
             for ((type, albums) in lists) {
@@ -130,6 +134,23 @@ fun HomeScreen(app: DesktopApp, nav: Navigator) {
         ListScrollbar(list)
         }
     }
+}
+
+/** Starts Picks radio: endless music from the weekly picks and the songs liked lately. */
+@Composable
+private fun PicksRadioButton(app: DesktopApp) {
+    var starting by remember { mutableStateOf(false) }
+    HudButton(if (starting) "Starting…" else "Picks radio", {
+        starting = true
+        // In the app's scope: it starts playing even when Home is left meanwhile.
+        app.scope.launch {
+            try {
+                app.attempt { app.startPicksRadio() }
+            } finally {
+                starting = false
+            }
+        }
+    }, icon = Icons.Rounded.Radio, filled = false, enabled = !starting)
 }
 
 /**

@@ -29,6 +29,9 @@ import io.github.deadeyebarb.tonearm.integrations.SongRequests
 import io.github.deadeyebarb.tonearm.likes.LikesSync
 import io.github.deadeyebarb.tonearm.integrations.PlaylistSources
 import io.github.deadeyebarb.tonearm.integrations.Continuation
+import io.github.deadeyebarb.tonearm.integrations.NextSong
+import io.github.deadeyebarb.tonearm.mixes.Mixer
+import io.github.deadeyebarb.tonearm.mixes.RadioSeed
 import io.github.deadeyebarb.tonearm.desktop.local.LocalLibrary
 import io.github.deadeyebarb.tonearm.desktop.config.AppDirs
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
@@ -121,7 +124,7 @@ class DesktopApp {
         queueStore.load()?.takeIf { it.playsWith(SavedQueue.serverOf(config.state.value.server)) }?.let(player::restore)
         // Saved a second after the queue changes, playback stops or a seek, every 30 s while it plays, and at exit.
         scope.launch(Dispatchers.IO) {
-            merge(player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing) }.distinctUntilChanged().drop(1), player.seeks).collectLatest {
+            merge(player.state.map { listOf(it.queue, it.index, it.shuffle, it.repeat, it.playing, it.radio) }.distinctUntilChanged().drop(1), player.seeks).collectLatest {
                 delay(1_000)
                 saveQueue()
                 while (player.state.value.playing) {
@@ -225,6 +228,8 @@ class DesktopApp {
         .also { it.start() }
     val local = LocalLibrary(json, config, AppDirs.cache).also { it.start(scope) }
     val weekly = WeeklyPicks(api, LidarrClient(integrationHttp, json), connectClient, json, config.state.value.deviceId, File(AppDirs.config, "weekly-run.json"))
+    /** Radio, mixes from a sentence and daily mixes: the Tonearm server's, else made here from the library. */
+    val mixer = Mixer(api, connectClient, tonearmServer, youtube, dislikes, weekly)
 
     init {
         // Notice when the Tonearm server appears, goes, or the music server changes.
@@ -294,7 +299,7 @@ class DesktopApp {
         val seed = song ?: artist?.let { name -> youtube.artistSongs(name, 1).firstOrNull()?.toConnectSong(ConnectSong.YOUTUBE) } ?: return emptyList()
         val last = Song(id = seed.id, title = seed.title, artist = seed.artist, album = seed.album, duration = seed.duration)
         val next = continuation.similar(last, seed.source == ConnectSong.YOUTUBE, sessions.current(), setOf(Continuation.key(seed.id, seed.source == ConnectSong.YOUTUBE)), cfg.playYouTube)
-        return listOf(seed) + next.map { if (it.youtube) it.song.toConnectSong(ConnectSong.YOUTUBE) else it.song.toConnectSong() }
+        return listOf(seed) + next.map { it.toConnectSong() }
     }
 
     /** Deezer's matches for a search, through the Tonearm server (null without its discovery). */
@@ -319,21 +324,41 @@ class DesktopApp {
         player.play(similarSongs(first, null))
     }
 
-    /** "When the queue ends": more of the same, or another playlist. */
-    private suspend fun continueQueue(last: ConnectSong, played: Set<String>): List<ConnectSong> {
+    /**
+     * Starts Picks radio: endless music from the weekly picks and the songs liked lately, from the Tonearm server or
+     * made here. Throws with the reason when there's nothing to start from.
+     */
+    suspend fun startPicksRadio() {
+        val seed = RadioSeed(RadioSeed.PICKS)
+        val first = mixer.radio(sessions.current(), seed, emptyList(), config.state.value.playYouTube)
+        if (first.songs.isEmpty()) throw IOException(first.problem ?: Mixer.NO_PICKS)
+        player.play(first.songs.map { it.toConnectSong() }, radio = seed)
+    }
+
+    /** More for the [queue]: the [radio]'s next songs, or else "When the queue ends" (more of the same, or another playlist). */
+    private suspend fun continueQueue(current: ConnectSong, queue: List<ConnectSong>, radio: RadioSeed?): List<ConnectSong> {
         val cfg = config.state.value
         val session = sessions.current()
+        if (radio != null) return mixer.radio(session, radio, queue.map { it.toNextSong() }, cfg.playYouTube).songs.map { it.toConnectSong() }
+        val played = queue.map(DesktopPlayer::key).toSet()
         val next = when (cfg.whenQueueEnds) {
             "similar" -> {
                 // A file on this computer has no similar songs on the server; YouTube Music's radio finds them.
-                val seed = Song(id = last.id, title = last.title, artist = last.artist, album = last.album, duration = last.duration)
-                continuation.similar(seed, last.source == ConnectSong.YOUTUBE, session, played, cfg.playYouTube)
+                continuation.similar(current.toNextSong().song, current.source == ConnectSong.YOUTUBE, session, played, cfg.playYouTube)
             }
             "playlist" -> session?.let { continuation.anotherPlaylist(it, played) }.orEmpty()
             else -> emptyList()
         }
-        return next.map { if (it.youtube) it.song.toConnectSong(ConnectSong.YOUTUBE) else it.song.toConnectSong() }
+        return next.map { it.toConnectSong() }
     }
+
+    private fun NextSong.toConnectSong() = if (youtube) song.toConnectSong(ConnectSong.YOUTUBE) else song.toConnectSong()
+
+    /** A queued song as the shared code has it, for what goes on from it (similar songs, radios). */
+    private fun ConnectSong.toNextSong() = NextSong(
+        Song(id = id, title = title, artist = artist, album = album, albumId = albumId, artistId = artistId, duration = duration),
+        source == ConnectSong.YOUTUBE,
+    )
 
     init {
         // What the phone disliked shows up here within a few minutes. Started last: it needs everything above,
