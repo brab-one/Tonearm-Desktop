@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.window.Tray
@@ -97,13 +98,16 @@ fun main() {
         }
         val nav = remember { Navigator() }
         // The mouse's back and forward buttons go back and forth like in a browser. AWT numbers them
-        // 4/5 on Windows and macOS, 6/7 on X11 (where 4–7 are taken by the scroll wheel).
+        // 4/5 on Windows and macOS. On X11 they're 6/7: there 4/5 are the horizontal scroll (a tilt wheel,
+        // a touchpad's sideways swipe), which mustn't page through screens.
         DisposableEffect(nav) {
+            val x11 = !AppDirs.isWindows && !System.getProperty("os.name").orEmpty().startsWith("Mac")
+            val (backButton, forwardButton) = if (x11) 6 to 7 else 4 to 5
             val listener = AWTEventListener { event ->
                 if (event is MouseEvent && event !is MouseWheelEvent && event.id == MouseEvent.MOUSE_PRESSED) {
                     when (event.button) {
-                        4, 6 -> nav.back()
-                        5, 7 -> nav.forward()
+                        backButton -> nav.back()
+                        forwardButton -> nav.forward()
                     }
                 }
             }
@@ -150,12 +154,20 @@ fun main() {
                     event.key == Key.MediaNext -> MediaKeys.run(app.player, MediaKeys.NEXT, inWindow = true)
                     event.key == Key.MediaPrevious -> MediaKeys.run(app.player, MediaKeys.PREVIOUS, inWindow = true)
                     event.isCtrlPressed && event.key == Key.P -> app.player.togglePlay()
+                    event.key == Key.Back -> nav.back()
+                    event.key == Key.Forward -> nav.forward()
+                    else -> return@Window false
+                }
+                true
+            },
+            // After the focused field had its go: in a text field Ctrl/Alt+arrows move by word (with Shift, select).
+            onKeyEvent = { event ->
+                if (event.type != KeyEventType.KeyDown || event.isShiftPressed) return@Window false
+                when {
                     event.isCtrlPressed && event.key == Key.DirectionRight -> app.player.next()
                     event.isCtrlPressed && event.key == Key.DirectionLeft -> app.player.previous()
                     event.isAltPressed && event.key == Key.DirectionLeft -> nav.back()
                     event.isAltPressed && event.key == Key.DirectionRight -> nav.forward()
-                    event.key == Key.Back -> nav.back()
-                    event.key == Key.Forward -> nav.forward()
                     else -> return@Window false
                 }
                 true
