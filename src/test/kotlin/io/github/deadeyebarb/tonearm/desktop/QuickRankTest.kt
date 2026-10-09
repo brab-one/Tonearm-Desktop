@@ -5,6 +5,7 @@ import io.github.deadeyebarb.tonearm.desktop.ui.QuickItem.Kind
 import io.github.deadeyebarb.tonearm.desktop.ui.QuickRank
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class QuickRankTest {
@@ -67,5 +68,16 @@ class QuickRankTest {
         val many = QuickRank.rank("tone", songs + albums)
         assertEquals(QuickRank.MAX_ROWS, many.size)
         assertTrue(QuickRank.rank("nothing like it", songs).isEmpty())
+    }
+
+    @Test
+    fun `enter before the library answered waits for its best fit, unless a row was picked`() {
+        assertTrue(QuickRank.waitsForSearch("osc", searched = "", picked = false))
+        assertTrue(QuickRank.waitsForSearch("bjork", searched = "beatles", picked = false))
+        assertFalse(QuickRank.waitsForSearch("osc", searched = "osc", picked = false))
+        // A row chosen with the arrows or the mouse opens right away.
+        assertFalse(QuickRank.waitsForSearch("osc", searched = "os", picked = true))
+        // One letter isn't searched for: only the playlists are listed, and Enter opens the best of them.
+        assertFalse(QuickRank.waitsForSearch("o", searched = "", picked = false))
     }
 }

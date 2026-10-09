@@ -28,19 +28,24 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,7 +80,16 @@ data class QuickItem(
 object QuickRank {
     const val MAX_SONGS = 6
     const val MAX_ROWS = 12
+    /** The library is searched from this many letters on; shorter, only the playlists are listed. */
+    const val MIN_SEARCH = 2
     private const val DISLIKED = 0.3
+
+    /**
+     * Enter before the library answered [query] ([searched]: the query it answered last) waits for that answer and
+     * opens its best fit then, unless a row was [picked] with the arrows or the mouse: that one opens right away.
+     */
+    fun waitsForSearch(query: String, searched: String, picked: Boolean): Boolean =
+        query.length >= MIN_SEARCH && searched != query && !picked
 
     /**
      * How well [query] fits [title]: 1 for the same name, 0.9 for its start, 0.8 when each word starts one of its
@@ -158,12 +172,30 @@ fun QuickSwitcher(app: DesktopApp, nav: Navigator, playlistsCache: QuickPlaylist
     val q = query.trim()
     var playlists by remember { mutableStateOf(emptyList<Playlist>()) }
     LaunchedEffect(Unit) { playlists = playlistsCache.get() }
+    // Enter came before the library's answer for q: the best fit in it opens when it comes.
+    var pendingEnter by remember { mutableStateOf(false) }
+
+    fun close() {
+        pendingEnter = false
+        onClose()
+    }
+
+    fun open(item: QuickItem) {
+        close()
+        when (item.kind) {
+            QuickItem.Kind.ARTIST -> nav.go(Screen.Artist(item.id))
+            QuickItem.Kind.ALBUM -> nav.go(Screen.Album(item.id))
+            QuickItem.Kind.PLAYLIST -> nav.go(Screen.Playlist(item.id))
+            QuickItem.Kind.SONG -> item.song?.let { app.player.play(listOf(it)) }
+        }
+    }
+
     // The library's answer for [searched]; the last one stays while the next is on its way.
     var found by remember { mutableStateOf(SearchResult()) }
     var searched by remember { mutableStateOf("") }
     var unreachable by remember { mutableStateOf(false) }
     LaunchedEffect(q) {
-        if (q.length < 2) return@LaunchedEffect
+        if (q.length < QuickRank.MIN_SEARCH) return@LaunchedEffect
         delay(150)
         try {
             found = app.api.search(q, artistCount = 6, albumCount = 8, songCount = 8)
@@ -175,32 +207,46 @@ fun QuickSwitcher(app: DesktopApp, nav: Navigator, playlistsCache: QuickPlaylist
             unreachable = true
         }
         searched = q
+        if (pendingEnter) {
+            pendingEnter = false
+            // Without an answer (the server unreachable), the best of the playlists.
+            QuickRank.rank(q, quickItems(app, found, playlists)).firstOrNull()?.let(::open)
+        }
     }
     val disliked by app.dislikes.state.collectAsState()
     val rows = remember(q, found, playlists, disliked) { if (q.isEmpty()) emptyList() else QuickRank.rank(q, quickItems(app, found, playlists)) }
     var selectedKey by remember(q) { mutableStateOf<String?>(null) }
     val selected = rows.indexOfFirst { it.key == selectedKey }.takeIf { it >= 0 } ?: 0
-
-    fun open(item: QuickItem) {
-        onClose()
-        when (item.kind) {
-            QuickItem.Kind.ARTIST -> nav.go(Screen.Artist(item.id))
-            QuickItem.Kind.ALBUM -> nav.go(Screen.Album(item.id))
-            QuickItem.Kind.PLAYLIST -> nav.go(Screen.Playlist(item.id))
-            QuickItem.Kind.SONG -> item.song?.let { app.player.play(listOf(it)) }
-        }
-    }
+    // The rows the pointer last moved over: only on those does the row it's on take the selection, so rows that come
+    // in under a resting pointer leave the best fit chosen. Compose sends a move again after each layout, where the
+    // pointer already was: only a move somewhere else counts.
+    var movedOver by remember { mutableStateOf<List<QuickItem>?>(null, referentialEqualityPolicy()) }
+    val shown by rememberUpdatedState(rows)
 
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     // A click outside the panel closes it; one on the panel itself doesn't.
-    Box(Modifier.fillMaxSize().background(hud.void.copy(alpha = 0.6f)).pointerInput(Unit) { detectTapGestures { onClose() } }) {
+    val overlay = Modifier.fillMaxSize().background(hud.void.copy(alpha = 0.6f))
+        .pointerInput(Unit) { detectTapGestures { close() } }
+        // The overlay never moves: where the pointer is on it only changes when the pointer does.
+        .pointerInput(Unit) {
+            awaitPointerEventScope {
+                var at: Offset? = null
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val position = event.changes.firstOrNull()?.position ?: continue
+                    if (event.type == PointerEventType.Move && position != at) movedOver = shown
+                    at = position
+                }
+            }
+        }
+    Box(overlay) {
         // Opaque underneath the panel's own see-through colour: the page mustn't show through.
         val panel = Modifier.align(Alignment.TopCenter).padding(top = 80.dp).width(640.dp).background(hud.panel, MaterialTheme.shapes.medium)
         Panel(panel.pointerInput(Unit) { detectTapGestures { } }, glow = true) {
             Column(Modifier.padding(12.dp)) {
                 OutlinedTextField(
-                    query, { query = it }, placeholder = { Text("JUMP TO_", style = MaterialTheme.typography.labelMedium) },
+                    query, { query = it; pendingEnter = false }, placeholder = { Text("JUMP TO_", style = MaterialTheme.typography.labelMedium) },
                     leadingIcon = { Icon(Icons.Rounded.Search, null, tint = hud.accent) }, singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = hud.accent, unfocusedBorderColor = hud.line),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus).onPreviewKeyEvent { event ->
@@ -208,8 +254,16 @@ fun QuickSwitcher(app: DesktopApp, nav: Navigator, playlistsCache: QuickPlaylist
                         when (event.key) {
                             Key.DirectionDown -> rows.getOrNull((selected + 1) % rows.size.coerceAtLeast(1))?.let { selectedKey = it.key }
                             Key.DirectionUp -> rows.getOrNull((selected - 1 + rows.size) % rows.size.coerceAtLeast(1))?.let { selectedKey = it.key }
-                            Key.Enter, Key.NumPadEnter -> rows.getOrNull(selected)?.let(::open)
-                            Key.Escape -> onClose()
+                            Key.Enter, Key.NumPadEnter -> {
+                                // As typed: the key just before may have come before its rows were made.
+                                val typed = query.trim()
+                                when {
+                                    QuickRank.waitsForSearch(typed, searched, picked = selectedKey != null) -> pendingEnter = true
+                                    typed == q -> rows.getOrNull(selected)?.let(::open)
+                                    else -> QuickRank.rank(typed, quickItems(app, found, playlists)).firstOrNull()?.let(::open)
+                                }
+                            }
+                            Key.Escape -> close()
                             else -> return@onPreviewKeyEvent false
                         }
                         true
@@ -217,7 +271,10 @@ fun QuickSwitcher(app: DesktopApp, nav: Navigator, playlistsCache: QuickPlaylist
                 )
                 Column(Modifier.padding(top = 8.dp)) {
                     rows.forEachIndexed { i, item ->
-                        QuickRow(app, item, selected = i == selected, onHover = { selectedKey = item.key }, onClick = { open(item) })
+                        QuickRow(
+                            app, item, selected = i == selected, pointerMoved = movedOver === rows,
+                            onHover = { selectedKey = item.key }, onClick = { open(item) },
+                        )
                     }
                 }
                 val line = when {
@@ -251,12 +308,13 @@ private fun quickItems(app: DesktopApp, found: SearchResult, playlists: List<Pla
             )
         }
 
+/** [pointerMoved]: the pointer moved since these rows came, so the row it's on is one it went to. */
 @Composable
-private fun QuickRow(app: DesktopApp, item: QuickItem, selected: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
+private fun QuickRow(app: DesktopApp, item: QuickItem, selected: Boolean, pointerMoved: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
     val hud = Hud.colors
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
-    LaunchedEffect(hovered) { if (hovered) onHover() }
+    LaunchedEffect(hovered, pointerMoved) { if (hovered && pointerMoved) onHover() }
     Row(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(if (selected) hud.accent.copy(alpha = 0.14f) else Color.Transparent)
             .hoverable(hover).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 5.dp),
