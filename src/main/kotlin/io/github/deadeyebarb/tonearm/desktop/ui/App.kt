@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,9 +86,12 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
@@ -225,8 +229,10 @@ fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQu
         } else {
             Row(Modifier.fillMaxSize()) {
                 Rail(app, nav)
+                // The queue opens above the player bar, which keeps its width.
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                    Row(Modifier.weight(1f).fillMaxWidth()) {
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
                         Column(Modifier.fillMaxSize()) {
                             // Always there, so screens don't move down once there's somewhere to go back to.
                             Row(Modifier.padding(start = 8.dp, top = 8.dp)) {
@@ -248,9 +254,10 @@ fun TonearmApp(app: DesktopApp, nav: Navigator, quickOpen: Boolean = false, onQu
                             }
                         }
                     }
+                    if (queueOpen) QueuePanel(app) { queueOpen = false }
+                    }
                     PlayerBar(app, nav, onQueue = { queueOpen = !queueOpen }, queueOpen = queueOpen, mini = mini)
                 }
-                if (queueOpen) QueuePanel(app) { queueOpen = false }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 104.dp)) { data ->
@@ -355,11 +362,20 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
     val ui = LocalUi.current
     val state by app.player.state.collectAsState()
     val song = state.current
-    Row(
-        Modifier.fillMaxWidth().height(96.dp).background(hud.panel).border(1.dp, hud.line).padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+    // With the queue open, its header has the radio's chip.
+    val radio = state.radio?.takeIf { !queueOpen }
+    val stopRadio = { app.player.setRadio(null) }
+    val chipLabel = radio?.let { "∞ " + it.title.uppercase() }
+    val chipStyle = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val chip = remember(chipLabel, chipStyle, density) {
+        chipLabel?.let { with(density) { measurer.measure(it, chipStyle, maxLines = 1).size.width.toDp() }.coerceAtMost(CHIP_LABEL_MAX) + CHIP_EXTRA }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(96.dp).background(hud.panel).border(1.dp, hud.line).padding(horizontal = 16.dp)) {
+    val layout = barLayout(maxWidth, dislike = app.canDislike, mini = mini != null, chip = chip)
+    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.width(layout.info), verticalAlignment = Alignment.CenterVertically) {
             if (song != null) {
                 // The song opens where it was started from, the artist their page; right-click for the song's menu.
                 val openFrom = { app.openPlayedFrom(nav, state.from, song) }
@@ -367,7 +383,7 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                 Box(Modifier.weight(1f, fill = false)) {
                     MenuArea({ songMenu(app, nav, ui, song) }) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            SongCover(app, song, link.size(64.dp).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.small).clickable(onClick = openFrom))
+                            SongCover(app, song, link.size(COVER).border(1.dp, hud.accent.copy(alpha = 0.5f), MaterialTheme.shapes.small).clickable(onClick = openFrom))
                             Spacer(Modifier.width(14.dp))
                             Column {
                                 Text(song.title, link.clickable(onClick = openFrom), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -375,14 +391,17 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                                     song.artist.orEmpty(), song.artist?.let { artist -> link.clickable { app.openArtist(nav, artist, song.artistId.takeIf { song.source == ConnectSong.SERVER }) } } ?: Modifier,
                                     style = MaterialTheme.typography.bodyMedium, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
-                                // The whole signal path on hover; the bar only has room for what it is, and a resampled output.
-                                val quality = qualityLine(song, state)
-                                val output = outputLine(state)
-                                Tip(listOfNotNull(quality, output).joinToString("\n")) {
-                                    Column {
-                                        Text(quality, style = MaterialTheme.typography.labelSmall, color = hud.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        if (output != null && state.outRate != state.sampleRate) {
-                                            Text(output, style = MaterialTheme.typography.labelSmall, color = hud.dim.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (chipLabel != null && !layout.chipInBar) {
+                                    // No room for it at the end: under the artist, in place of the format.
+                                    RadioChip(chipLabel, stopRadio, Modifier.padding(top = 2.dp).widthIn(max = CHIP_LABEL_MAX + CHIP_EXTRA), onClick = onQueue)
+                                } else {
+                                    // The whole signal path on hover; the bar has room for what it is (as much as fits), and a resampled output.
+                                    val quality = qualityParts(song, state)
+                                    val output = outputParts(state)
+                                    Tip(listOf(quality, output).filter { it.isNotEmpty() }.joinToString("\n") { it.joinToString(" ▸ ") }) {
+                                        Column {
+                                            FittingLine(quality, hud.dim)
+                                            if (output.isNotEmpty() && state.outRate != state.sampleRate) FittingLine(output, hud.dim.copy(alpha = 0.7f), least = 2)
                                         }
                                     }
                                 }
@@ -392,13 +411,13 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                     }
                 }
                 Spacer(Modifier.width(4.dp))
-                if (app.canDislike) DislikeButton(app, song)
-                LikeButton(app, song)
+                if (app.canDislike) DislikeButton(app, song, LIKE)
+                LikeButton(app, song, LIKE)
             } else {
                 Text("NOTHING PLAYING", style = MaterialTheme.typography.labelMedium, color = hud.dim)
             }
         }
-        Column(Modifier.weight(1.3f), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.width(layout.controls), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tip(if (state.shuffle) "Shuffle: on" else "Shuffle: off") {
                     IconButton(onClick = { app.player.setShuffle(!state.shuffle) }) {
@@ -427,43 +446,41 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                     }
                 }
             }
-            SeekBar(state, Modifier.widthIn(max = 516.dp).fillMaxWidth()) { app.player.seek(it) }
+            SeekBar(state, Modifier.fillMaxWidth()) { app.player.seek(it) }
         }
-        // Short of room (a small window, the queue open), a radio's chip is just its ∞, and the volume slider narrower
-        // or gone (the wheel still turns it).
-        BoxWithConstraints(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-        val roomy = maxWidth >= 330.dp
-        val slider = maxWidth >= 200.dp
-        Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            // With the queue open, its header has it.
-            if (!queueOpen) {
-                state.radio?.let { radio ->
-                    val stop = { app.player.setRadio(null) }
-                    if (roomy) RadioChip("∞ " + radio.title.uppercase(), stop, onClick = onQueue) else Tip(radio.title) { RadioChip("∞", stop, onClick = onQueue) }
-                    Spacer(Modifier.width(if (roomy) 12.dp else 8.dp))
-                }
+        Row(Modifier.width(layout.end), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (chipLabel != null && layout.chipInBar) {
+                RadioChip(chipLabel, stopRadio, Modifier.widthIn(max = CHIP_LABEL_MAX + CHIP_EXTRA), onClick = onQueue)
+                Spacer(Modifier.width(12.dp))
             }
-            var dragging by remember { mutableStateOf<Float?>(null) }
             // The wheel turns it too, 5% a notch.
             val wheel = Modifier.onPointerEvent(PointerEventType.Scroll) { event ->
                 val notches = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                 if (notches != 0f) app.player.setVolume((state.volume - notches * 5).roundToInt().coerceIn(0, 100))
             }
-            Tip("Volume ${state.volume}%", wheel.weight(1f, fill = false)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
-                    if (slider) {
-                        Slider(
-                            value = dragging ?: (state.volume / 100f),
-                            onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
-                            onValueChangeFinished = { dragging = null },
-                            colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
-                            modifier = Modifier.widthIn(max = 140.dp),
-                        )
+            if (layout.slider) {
+                Tip("Volume ${state.volume}%", wheel) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = hud.dim)
+                        VolumeSlider(app, state.volume, Modifier.width(SLIDER))
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+            } else {
+                // Short of room, the slider opens from the speaker.
+                var open by remember { mutableStateOf(false) }
+                Box(wheel) {
+                    Tip("Volume ${state.volume}%") {
+                        IconButton(onClick = { open = true }) { Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Volume", tint = if (open) hud.accent else hud.dim) }
+                    }
+                    DropdownMenu(open, { open = false }, modifier = Modifier.background(hud.panelHigh)) {
+                        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            VolumeSlider(app, state.volume, Modifier.width(160.dp))
+                            Text("${state.volume}%", style = MaterialTheme.typography.labelSmall, color = hud.dim, modifier = Modifier.padding(start = 8.dp).width(36.dp))
+                        }
                     }
                 }
             }
-            if (slider) Spacer(Modifier.width(8.dp))
             if (mini != null) {
                 Tip(if (mini.open) "Close the mini player" else "Mini player") {
                     IconButton(onClick = mini::toggle) { Icon(Icons.Rounded.PictureInPictureAlt, "Mini player", tint = if (mini.open) hud.accent else hud.dim) }
@@ -473,7 +490,68 @@ private fun PlayerBar(app: DesktopApp, nav: Navigator, onQueue: () -> Unit, queu
                 IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Rounded.QueueMusic, "Queue", tint = if (queueOpen) hud.accent else hud.dim) }
             }
         }
+    }
+    }
+}
+
+private val COVER = 64.dp
+private val LIKE = 36.dp
+private val BUTTON = 48.dp
+private val SLIDER = 112.dp
+private val CONTROLS_MIN = 300.dp
+private val CONTROLS_MAX = 480.dp
+/** The room the song's title and artist get before the radio's chip and the volume slider make way. */
+private val TEXT_ROOM = 180.dp
+/** A radio's chip: its label at most this wide, and [CHIP_EXTRA] around it (padding and ✕). */
+private val CHIP_LABEL_MAX = 160.dp
+private val CHIP_EXTRA = 32.dp
+
+/** How the player bar shares its width: the song, the controls, and the end (radio chip, volume, buttons). */
+internal data class BarLayout(val info: Dp, val controls: Dp, val end: Dp, val chipInBar: Boolean, val slider: Boolean)
+
+/**
+ * The player bar's widths in [width]. The song's title and artist get their room first: short of it, a radio's chip
+ * ([chip] wide, null without one) moves under the artist, then the volume slider behind the speaker. The controls
+ * stay in the middle while that leaves the song its room, and move over to give it more when it doesn't.
+ */
+internal fun barLayout(width: Dp, dislike: Boolean, mini: Boolean, chip: Dp?): BarLayout {
+    val controls = (width * 0.36f).coerceIn(CONTROLS_MIN, CONTROLS_MAX)
+    val infoFixed = COVER + 14.dp + 4.dp + LIKE * (if (dislike) 2 else 1)
+    fun end(chipInBar: Boolean, slider: Boolean) = BUTTON * (if (mini) 2 else 1) +
+        (if (slider) 24.dp + SLIDER + 8.dp else BUTTON) + (if (chipInBar && chip != null) chip + 12.dp else 0.dp)
+    val choices = listOfNotNull((true to true).takeIf { chip != null }, false to true, false to false)
+    val (chipInBar, slider) = choices.firstOrNull { (c, s) -> width - controls - end(c, s) - infoFixed >= TEXT_ROOM } ?: choices.last()
+    val end = end(chipInBar, slider)
+    val side = (width - controls) / 2
+    return if (end <= side && side - infoFixed >= TEXT_ROOM) BarLayout(side, controls, side, chipInBar, slider)
+    else BarLayout((width - controls - end).coerceAtLeast(0.dp), controls, end, chipInBar, slider)
+}
+
+/** The volume; dragging sets it as it goes. Always as wide as [modifier] makes it, so its whole track shows. */
+@Composable
+private fun VolumeSlider(app: DesktopApp, volume: Int, modifier: Modifier) {
+    val hud = Hud.colors
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    Slider(
+        value = dragging ?: (volume / 100f),
+        onValueChange = { dragging = it; app.player.setVolume((it * 100).toInt()) },
+        onValueChangeFinished = { dragging = null },
+        colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
+        modifier = modifier,
+    )
+}
+
+/** [parts] after one another (FLAC ▸ 24 BIT ▸ …), as many of them as fit; nothing when not even [least] of them do. */
+@Composable
+private fun FittingLine(parts: List<String>, color: Color, least: Int = 1) {
+    val style = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints {
+        val room = constraints.maxWidth
+        val text = remember(parts, room, style) {
+            (parts.size downTo least).map { parts.take(it).joinToString(" ▸ ") }.firstOrNull { measurer.measure(it, style, maxLines = 1).size.width <= room }
         }
+        if (text != null) Text(text, style = style, color = color, maxLines = 1)
     }
 }
 
@@ -487,7 +565,10 @@ private fun RadioChip(label: String, onStop: () -> Unit, modifier: Modifier = Mo
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(start = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1)
+        Text(
+            label, style = MaterialTheme.typography.labelSmall, color = hud.accent2, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
         Tip("Stop the radio") {
             IconButton(onClick = onStop, modifier = Modifier.size(24.dp)) {
                 Icon(Icons.Rounded.Close, "Stop the radio", tint = hud.accent2, modifier = Modifier.size(14.dp))
@@ -519,26 +600,25 @@ internal fun SeekBar(state: PlayerState, modifier: Modifier, onSeek: (Long) -> U
     }
 }
 
-/** What mpv sends to the sound device, when it differs from the file (resampled or converted). */
-private fun outputLine(state: PlayerState): String? {
-    val rate = state.outRate ?: return null
-    val format = state.outFormat?.uppercase()
-    val same = rate == state.sampleRate
-    return if (same) "OUT ▸ ${rate / 1000.0} KHZ ${format.orEmpty()} ▸ NATIVE RATE" else "OUT ▸ ${rate / 1000.0} KHZ ${format.orEmpty()} ▸ RESAMPLED"
+/** What mpv sends to the sound device, and whether that's the file's own rate; none before it plays. */
+private fun outputParts(state: PlayerState): List<String> {
+    val rate = state.outRate ?: return emptyList()
+    return listOf("OUT", "${rate / 1000.0} KHZ ${state.outFormat?.uppercase().orEmpty()}".trim(), if (rate == state.sampleRate) "NATIVE RATE" else "RESAMPLED")
 }
 
-private fun qualityLine(song: ConnectSong, state: PlayerState): String = when (song.source) {
-    ConnectSong.YOUTUBE -> listOfNotNull("YOUTUBE MUSIC", state.codec?.uppercase(), state.sampleRate?.let { "${it / 1000.0} KHZ" }).joinToString(" ▸ ")
+/** What the song is, the most telling first: what plays it, the codec, bit depth, sample rate and bit rate. */
+private fun qualityParts(song: ConnectSong, state: PlayerState): List<String> = when (song.source) {
+    ConnectSong.YOUTUBE -> listOfNotNull("YOUTUBE MUSIC", state.codec?.uppercase(), state.sampleRate?.let { "${it / 1000.0} KHZ" })
     ConnectSong.LOCAL -> listOfNotNull(
         "LOCAL", (state.codec ?: song.suffix)?.uppercase(), song.bitDepth?.let { "$it BIT" },
         (state.sampleRate ?: song.samplingRate)?.let { "${it / 1000.0} KHZ" },
-    ).joinToString(" ▸ ")
+    )
     else -> listOfNotNull(
         (state.codec ?: song.suffix)?.uppercase(),
         song.bitDepth?.let { "$it BIT" },
         (state.sampleRate ?: song.samplingRate)?.let { "${it / 1000.0} KHZ" },
         song.bitRate?.takeIf { it > 0 }?.let { "$it KBPS" },
-    ).joinToString(" ▸ ")
+    )
 }
 
 @Composable

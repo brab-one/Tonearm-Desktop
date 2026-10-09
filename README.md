@@ -76,7 +76,8 @@ submodule).
   doesn't count), and every song it plays (YouTube Music and skips too) goes to the Tonearm server's listening
   history with how long you heard it, which the picks learn from
 - **Player bar**: click the song to go back to where you started it, the artist for their page, right-click
-  for the song's menu
+  for the song's menu. In a small window the song keeps its room: a radio's chip moves under the artist, and the
+  volume slider opens from the speaker
 - Seeking works behind proxies that drop range requests (the whole song is buffered and seeked in)
 - Shortcuts: Ctrl+P play/pause, Ctrl+← / Ctrl+→ previous/next (in a text field they move by word, as usual),
   Ctrl+K to jump anywhere

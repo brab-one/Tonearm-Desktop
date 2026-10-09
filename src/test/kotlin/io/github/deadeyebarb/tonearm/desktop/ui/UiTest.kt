@@ -2,6 +2,8 @@ package io.github.deadeyebarb.tonearm.desktop.ui
 
 import io.github.deadeyebarb.tonearm.data.ClientCert
 import io.github.deadeyebarb.tonearm.data.ServerConfig
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
 import kotlin.test.Test
@@ -61,5 +63,36 @@ class UiTest {
     fun `about shows the version the build was made as`() {
         assertNotEquals("dev", AppVersion)
         assertTrue(Regex("""\d+\.\d+\.\d+.*""").matches(AppVersion), AppVersion)
+    }
+
+    @Test
+    fun `the player bar gives the song its room first, and keeps the controls in the middle when it can`() {
+        // The bar's width in the smallest window (1000) and the usual one (1360), with or without the queue open.
+        val small = 1000.dp - 212.dp - 32.dp
+        val usual = 1360.dp - 212.dp - 32.dp
+        val picks = 114.dp
+        fun BarLayout.room() = info - 154.dp
+        fun BarLayout.centred() = info == end
+        fun BarLayout.fits(width: Dp) = assertEquals(width.value, (info + controls + end).value, 0.01f)
+
+        barLayout(usual, dislike = true, mini = true, chip = null).let {
+            assertTrue(it.slider && it.centred() && it.room() >= 180.dp)
+            it.fits(usual)
+        }
+        // A radio's chip fits at the end, next to the whole slider.
+        barLayout(usual, dislike = true, mini = true, chip = picks).let {
+            assertTrue(it.chipInBar && it.slider && it.room() >= 180.dp)
+            it.fits(usual)
+        }
+        // A long one goes under the artist.
+        barLayout(usual, dislike = true, mini = true, chip = 192.dp).let { assertTrue(!it.chipInBar && it.slider && it.centred()) }
+        // Small: the chip under the artist, and the slider behind the speaker, before the title gets short.
+        for (chip in listOf(null, picks)) {
+            barLayout(small, dislike = true, mini = true, chip = chip).let {
+                assertTrue(!it.chipInBar && !it.slider && it.room() >= 150.dp)
+                assertEquals(300.dp, it.controls)
+                it.fits(small)
+            }
+        }
     }
 }
