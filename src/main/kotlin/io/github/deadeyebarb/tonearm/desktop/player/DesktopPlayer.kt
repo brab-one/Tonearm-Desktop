@@ -372,7 +372,8 @@ class DesktopPlayer(
                 // Playing again: a radio's retry that came while paused asks now.
                 if (!was && _state.value.playing) maybeContinue()
             }
-            "time-pos" -> (value as? Double)?.let { seconds ->
+            // Positions and lengths are the current song's: one still on its way after the queue emptied isn't.
+            "time-pos" -> (value as? Double)?.takeIf { _state.value.current != null }?.let { seconds ->
                 val ms = (seconds * 1000).toLong()
                 heard?.at(ms, _state.value.playing)
                 // Every frame reports a position; the UI only needs a few updates a second.
@@ -381,7 +382,7 @@ class DesktopPlayer(
                     maybeScrobble()
                 }
             }
-            "duration" -> (value as? Double)?.let { d -> _state.update { it.copy(durationMs = (d * 1000).toLong()) } }
+            "duration" -> (value as? Double)?.takeIf { _state.value.current != null }?.let { d -> _state.update { it.copy(durationMs = (d * 1000).toLong()) } }
             "volume" -> (value as? Double)?.let { v -> _state.update { it.copy(volume = v.toInt()) } }
             "paused-for-cache" -> _state.update { it.copy(buffering = value == true) }
             "idle-active" -> if (value == true) {
@@ -639,6 +640,8 @@ class DesktopPlayer(
     }
 
     private fun seekNow(positionMs: Long) {
+        // No song, no place in one: a seek that still comes (the phone's, for a queue emptied since) changes nothing.
+        if (_state.value.current == null) return
         // Nothing loaded (a restored queue, or stopped): play starts there.
         if (entries.isNotEmpty()) ownSeek = mpv.command("seek", String.format(Locale.ROOT, "%.3f", positionMs / 1000.0), "absolute")
         _state.update { it.copy(positionMs = positionMs) }
