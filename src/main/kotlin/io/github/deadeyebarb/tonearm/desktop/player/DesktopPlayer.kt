@@ -57,6 +57,9 @@ data class PlayerState(
 
     /** Within a second of the end: the song played out (positions come a few times a second, never quite at the end). */
     val atEnd: Boolean get() = durationMs > 0 && positionMs >= durationMs - 1_000
+
+    /** The seek bar can be used: there's a song, and its length is known. */
+    val seekable: Boolean get() = current != null && durationMs > 0
 }
 
 /**

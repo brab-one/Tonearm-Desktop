@@ -58,6 +58,31 @@ class TrayAndQueueTest {
             // An index past the end (the last song had just gone) keeps the queue, at its last song.
             file.writeText("{\"songs\": [{\"id\": \"a\"}], \"index\": 3}")
             assertEquals(0, QueueStore(json, file).load()?.index)
+            // No songs but a place in one (1.12.1 saved that after the queue emptied): nothing to restore.
+            file.writeText("{\"server\":\"https://music.example|me\",\"positionMs\":4325}")
+            assertNull(QueueStore(json, file).load())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `an emptied queue keeps no place in a song, and its bar can't seek`() {
+        val dir = Files.createTempDirectory("tonearm-test").toFile()
+        try {
+            val file = dir.resolve("queue.json")
+            // The last song taken out 4 s in: what's left of it isn't kept.
+            val emptied = PlayerState(queue = emptyList(), index = 0, positionMs = 4_325, durationMs = 200_000)
+            assertEquals(0, SavedQueue.of(emptied, "s").positionMs)
+            QueueStore(json, file).save(SavedQueue.of(emptied, "s"))
+            assertFalse("positionMs" in file.readText())
+            assertNull(QueueStore(json, file).load())
+            // Nor is the place in a song that's gone from the end of the queue.
+            assertEquals(0, SavedQueue.of(PlayerState(queue = songs, index = songs.size, positionMs = 4_325, durationMs = 200_000), "s").positionMs)
+            assertFalse(emptied.seekable)
+            assertTrue(PlayerState(queue = songs, index = 0, positionMs = 4_325, durationMs = 200_000).seekable)
+            // A song whose length isn't known yet can't be sought on the bar either.
+            assertFalse(PlayerState(queue = songs, index = 0).seekable)
         } finally {
             dir.deleteRecursively()
         }

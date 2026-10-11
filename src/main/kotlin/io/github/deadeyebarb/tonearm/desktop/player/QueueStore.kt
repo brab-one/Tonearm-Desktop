@@ -42,8 +42,8 @@ data class SavedQueue(
             songs = state.queue,
             // The last song in play order may just have gone: the one before it, then.
             index = if (state.queue.isEmpty()) 0 else state.index.coerceIn(0, state.queue.lastIndex),
-            // A song that played to its end starts over next time.
-            positionMs = if (state.atEnd) 0 else state.positionMs,
+            // A song that played to its end starts over next time; with no song there's no place in one to keep.
+            positionMs = if (state.current == null || state.atEnd) 0 else state.positionMs,
             shuffle = state.shuffle,
             repeat = state.repeat,
             order = order,

@@ -592,7 +592,7 @@ internal fun SeekBar(state: PlayerState, modifier: Modifier, onSeek: (Long) -> U
                 dragging?.let { onSeek((it * duration).toLong()) }
                 dragging = null
             },
-            enabled = duration > 0,
+            enabled = state.seekable,
             colors = SliderDefaults.colors(thumbColor = hud.accent, activeTrackColor = hud.accent, inactiveTrackColor = hud.line),
             modifier = Modifier.weight(1f).height(24.dp),
         )
