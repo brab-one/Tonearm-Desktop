@@ -41,6 +41,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -60,6 +61,7 @@ import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
+import io.github.deadeyebarb.tonearm.integrations.WhoseRequests
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -100,21 +102,49 @@ fun LidarrScreen(app: DesktopApp, nav: Navigator) {
     }
 }
 
+/** Whose requests Lidarr's lists hold, and who this user is (their own read "you" in everyone's). */
+private class Requests(val whose: WhoseRequests, val me: String?)
+
+@Composable
+private fun rememberRequests(app: DesktopApp): Requests {
+    val server by app.tonearmServer.server.collectAsState()
+    val me by produceState<String?>(null, server) { value = app.sessions.current()?.let { app.tonearmServer.user(it) } }
+    return Requests(WhoseRequests.of(server), me)
+}
+
+/** "Your requests" or "all requests" over a list; nothing when it's just Lidarr's. */
+@Composable
+private fun RequestsHeader(requests: Requests) {
+    requests.whose.label?.let { SectionHeader(it, Modifier.padding(bottom = 4.dp)) }
+}
+
+/** Who asked for a queue item or wanted album, in everyone's lists. */
+@Composable
+private fun RequesterTag(requests: Requests, requestedBy: List<String>) {
+    requests.whose.tag(requestedBy, requests.me)?.let { HudTag(it, color = Hud.colors.dim) }
+}
+
 /** What Lidarr wants but hasn't found yet: monitored albums without their files, each searchable again. */
 @Composable
 private fun WantedTab(app: DesktopApp) {
     val hud = Hud.colors
     val scope = rememberCoroutineScope()
+    val requests = rememberRequests(app)
     var refresh by remember { mutableIntStateOf(0) }
     val loader = rememberLoad(refresh) { app.lidarr.wanted().sortedByDescending { it.releaseDate.orEmpty() } }
     LoadContent(loader) { albums ->
         if (albums.isEmpty()) {
-            EmptyState(Icons.Rounded.CloudDownload, "Nothing wanted", "Everything Lidarr monitors is on your server.")
+            val mine = requests.whose == WhoseRequests.OWN
+            EmptyState(Icons.Rounded.CloudDownload, "Nothing wanted", if (mine) "Everything you asked for is on your server." else "Everything Lidarr monitors is on your server.")
             return@LoadContent
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(28.dp)) {
+            item { RequestsHeader(requests) }
             item {
-                Text("${albums.size} albums Lidarr is still looking for", style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(bottom = 8.dp))
+                Text(
+                    count(albums.size, "album", "albums") + " Lidarr is still looking for",
+                    style = MaterialTheme.typography.bodyMedium, color = hud.dim, modifier = Modifier.padding(bottom = 8.dp),
+                )
             }
             items(albums, key = { it.id }) { album ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -126,6 +156,7 @@ private fun WantedTab(app: DesktopApp) {
                             style = MaterialTheme.typography.bodySmall, color = hud.accent2, maxLines = 1,
                         )
                     }
+                    RequesterTag(requests, album.requestedBy)
                     HudButton("Search now", {
                         scope.launch { app.attempt { app.lidarr.searchAlbum(album.id); app.message("Lidarr is searching for ${album.title}") } }
                     }, filled = false)
@@ -201,6 +232,7 @@ private fun CandidateRow(candidate: LidarrCandidate, requested: Boolean, onReque
 @Composable
 private fun DownloadsTab(app: DesktopApp) {
     val hud = Hud.colors
+    val requests = rememberRequests(app)
     var items by remember { mutableStateOf<Load<List<LidarrQueueItem>>>(Load.Loading) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -221,13 +253,15 @@ private fun DownloadsTab(app: DesktopApp) {
             EmptyState(Icons.Rounded.CloudDownload, "Nothing downloading", "Requested music shows up here while Lidarr fetches it.")
         } else {
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(28.dp)) {
+                item { RequestsHeader(requests) }
                 items(state.value, key = { it.id }) { item ->
                     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Column(Modifier.weight(1f)) {
                                 Text(item.album?.title ?: item.title.orEmpty(), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(item.artist?.artistName.orEmpty(), style = MaterialTheme.typography.bodySmall, color = hud.accent2)
                             }
+                            RequesterTag(requests, item.requestedBy)
                             Text(
                                 listOfNotNull(item.trackedDownloadState ?: item.status, item.timeleft?.let { "$it left" }).joinToString(" · ").uppercase(),
                                 style = MaterialTheme.typography.labelSmall, color = if (item.errorMessage != null) hud.danger else hud.dim,
