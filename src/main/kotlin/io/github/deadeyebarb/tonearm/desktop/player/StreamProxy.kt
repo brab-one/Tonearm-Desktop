@@ -18,7 +18,8 @@ import java.util.concurrent.Executors
 /**
  * A loopback-only HTTP server mpv streams from. It fetches from the music server with Tonearm's
  * client (credentials, client certificate, pinned CA) or from YouTube Music with the right User-Agent,
- * passing Range requests through so seeking works. A random path token keeps other local users out.
+ * passing Range requests through so seeking works (from a server that can't do ranges, mpv seeks in what it
+ * has downloaded). A random path token keeps other local users out.
  */
 class StreamProxy(
     private val sessions: DesktopSessions,
@@ -103,12 +104,19 @@ class StreamProxy(
                 return skipTo(exchange, response, start, head)
             }
             val code = if (wholeFile && response.code == 206) 200 else response.code
+            // Asked for a range, it sent the whole file: it can't do ranges, whatever its Accept-Ranges says (a proxy
+            // in front of the server may drop them). mpv gets it as a plain stream then, without Accept-Ranges and
+            // without the length: it seeks in what it has and reads on to the rest. Told it could seek, it asked for
+            // ranges that only came back by downloading the song again, couldn't place them without a length, and
+            // ended the song; given the length, it read the whole song before playing from a saved position.
+            val ignoresRanges = range != null && response.code == 200
             for (name in listOf("Content-Type", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag")) {
                 if (name == "Content-Range" && code != 206) continue
+                if (name == "Accept-Ranges" && ignoresRanges) continue
                 response.header(name)?.let { exchange.responseHeaders.set(name, it) }
             }
-            if (wholeFile) exchange.responseHeaders.set("Accept-Ranges", "bytes")
-            val length = response.header("Content-Length")?.toLongOrNull()
+            if (wholeFile && !ignoresRanges) exchange.responseHeaders.set("Accept-Ranges", "bytes")
+            val length = response.header("Content-Length")?.toLongOrNull()?.takeUnless { ignoresRanges }
             if (head || code == 204) {
                 length?.let { exchange.responseHeaders.set("Content-Length", it.toString()) }
                 exchange.sendResponseHeaders(code, -1)
