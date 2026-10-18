@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "io.github.deadeyebarb.tonearm"
-version = "1.13.0"
+version = "1.14.0"
 
 kotlin {
     jvmToolchain(21)
