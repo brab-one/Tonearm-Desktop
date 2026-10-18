@@ -12,6 +12,13 @@ import io.github.deadeyebarb.tonearm.integrations.MusicRemoval
 import io.github.deadeyebarb.tonearm.likes.Dislikes
 import io.github.deadeyebarb.tonearm.connect.Played
 import io.github.deadeyebarb.tonearm.connect.DailyMixes
+import io.github.deadeyebarb.tonearm.integrations.LidarrAlbum
+import io.github.deadeyebarb.tonearm.integrations.YouTubeFallback
+import io.github.deadeyebarb.tonearm.subsonic.userMessage
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.io.IOException
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -206,6 +213,30 @@ class DesktopApp {
     suspend fun dismiss(artist: String) {
         connectClient.dismiss(sessions.require(), artist)
         dislikes.refresh()
+    }
+
+    private val _fromYouTube = MutableStateFlow(setOf<Int>())
+    /** Wanted albums (Lidarr ids) being fetched from YouTube Music right now, for the Wanted tab's spinners. */
+    val fromYouTube: StateFlow<Set<Int>> = _fromYouTube.asStateFlow()
+
+    /**
+     * Has the Tonearm server get a wanted [album] from YouTube Music now, and says what came of it. Lidarr takes a minute
+     * or two for that, so it runs in the app's scope: switching tabs doesn't stop it.
+     */
+    fun youtubeNow(album: LidarrAlbum) {
+        if (album.id in _fromYouTube.value) return
+        _fromYouTube.update { it + album.id }
+        scope.launch {
+            try {
+                message(YouTubeFallback.message(connectClient.youtubeNow(sessions.require(), album.id), album.title))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message(e.userMessage())
+            } finally {
+                _fromYouTube.update { it - album.id }
+            }
+        }
     }
 
     /**

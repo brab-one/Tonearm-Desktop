@@ -59,9 +59,11 @@ import coil3.compose.AsyncImage
 import io.github.deadeyebarb.tonearm.connect.ConnectSong
 import io.github.deadeyebarb.tonearm.connect.toConnectSong
 import io.github.deadeyebarb.tonearm.desktop.DesktopApp
+import io.github.deadeyebarb.tonearm.integrations.LidarrAlbum
 import io.github.deadeyebarb.tonearm.integrations.LidarrCandidate
 import io.github.deadeyebarb.tonearm.integrations.LidarrQueueItem
 import io.github.deadeyebarb.tonearm.integrations.WhoseRequests
+import io.github.deadeyebarb.tonearm.integrations.YouTubeFallback
 import io.github.deadeyebarb.tonearm.subsonic.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -124,15 +126,45 @@ private fun RequesterTag(requests: Requests, requestedBy: List<String>) {
     requests.whose.tag(requestedBy, requests.me)?.let { HudTag(it, color = Hud.colors.dim) }
 }
 
-/** What Lidarr wants but hasn't found yet: monitored albums without their files, each searchable again. */
+/** Lidarr's wanted albums, and which of them are downloading (by Lidarr id). */
+private class Wanted(val albums: List<LidarrAlbum>, val queued: Set<Int>)
+
+/**
+ * What Lidarr wants but hasn't found yet: monitored albums without their files, each searchable again. With the Tonearm
+ * server's YouTube fallback, each says when the server gets it from YouTube Music, and "From YouTube now" doesn't wait.
+ */
 @Composable
 private fun WantedTab(app: DesktopApp) {
     val hud = Hud.colors
     val scope = rememberCoroutineScope()
     val requests = rememberRequests(app)
-    var refresh by remember { mutableIntStateOf(0) }
-    val loader = rememberLoad(refresh) { app.lidarr.wanted().sortedByDescending { it.releaseDate.orEmpty() } }
-    LoadContent(loader) { albums ->
+    val server by app.tonearmServer.server.collectAsState()
+    val fetching by app.fromYouTube.collectAsState()
+    val fallback = (server?.youtubeFallback ?: 0) > 0
+    // With the fallback the list is fetched again as often as the server looks, so its tags follow what it did.
+    var again by remember { mutableIntStateOf(0) }
+    LaunchedEffect(fallback) {
+        while (fallback) {
+            delay(2 * 60_000L)
+            again++
+        }
+    }
+    // The tags count down while the tab is open.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(15_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val loader = rememberLoad(Unit, reloadOn = again) {
+        coroutineScope {
+            val queue = async { runCatching { app.lidarr.queue() }.getOrDefault(emptyList()) }
+            val albums = app.lidarr.wanted().sortedByDescending { it.releaseDate.orEmpty() }
+            Wanted(albums, queue.await().mapNotNullTo(HashSet()) { it.album?.id })
+        }
+    }
+    LoadContent(loader) { wanted ->
+        val albums = wanted.albums
         if (albums.isEmpty()) {
             val mine = requests.whose == WhoseRequests.OWN
             EmptyState(Icons.Rounded.CloudDownload, "Nothing wanted", if (mine) "Everything you asked for is on your server." else "Everything Lidarr monitors is on your server.")
@@ -156,10 +188,21 @@ private fun WantedTab(app: DesktopApp) {
                             style = MaterialTheme.typography.bodySmall, color = hud.accent2, maxLines = 1,
                         )
                     }
+                    // The server's fallback leaves albums with a download under way alone.
+                    YouTubeFallback.tag(album, now, queued = album.id in wanted.queued)?.let { tag ->
+                        HudTag(tag, color = if (album.youtubeTried != null) hud.dim else hud.accent)
+                    }
                     RequesterTag(requests, album.requestedBy)
                     HudButton("Search now", {
                         scope.launch { app.attempt { app.lidarr.searchAlbum(album.id); app.message("Lidarr is searching for ${album.title}") } }
                     }, filled = false)
+                    if (server?.youtubeNow == true) {
+                        if (album.id in fetching) {
+                            Box(Modifier.width(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(22.dp), color = hud.accent, strokeWidth = 2.dp) }
+                        } else {
+                            HudButton("From YouTube now", { app.youtubeNow(album) }, filled = false)
+                        }
+                    }
                 }
             }
         }
