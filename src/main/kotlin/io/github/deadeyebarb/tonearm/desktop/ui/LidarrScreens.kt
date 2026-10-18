@@ -48,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -140,8 +141,9 @@ private fun WantedTab(app: DesktopApp) {
     val requests = rememberRequests(app)
     val server by app.tonearmServer.server.collectAsState()
     val fetching by app.fromYouTube.collectAsState()
+    val answers by app.youtubeAnswers.collectAsState()
     val fallback = (server?.youtubeFallback ?: 0) > 0
-    // With the fallback the list is fetched again as often as the server looks, so its tags follow what it did.
+    // With the fallback the list is fetched again as often as the server looks, and after a YouTube now, so its tags follow what it did.
     var again by remember { mutableIntStateOf(0) }
     LaunchedEffect(fallback) {
         while (fallback) {
@@ -149,18 +151,19 @@ private fun WantedTab(app: DesktopApp) {
             again++
         }
     }
-    // The tags count down while the tab is open.
-    val now by produceState(System.currentTimeMillis()) {
-        while (true) {
-            delay(15_000)
-            value = System.currentTimeMillis()
-        }
-    }
-    val loader = rememberLoad(Unit, reloadOn = again) {
+    val loader = rememberLoad(Unit, reloadOn = again + answers) {
         coroutineScope {
             val queue = async { runCatching { app.lidarr.queue() }.getOrDefault(emptyList()) }
             val albums = app.lidarr.wanted().sortedByDescending { it.releaseDate.orEmpty() }
             Wanted(albums, queue.await().mapNotNullTo(HashSet()) { it.album?.id })
+        }
+    }
+    // The tags count down while the tab is open, from when the list came.
+    val now by produceState(System.currentTimeMillis(), loader.state) {
+        value = System.currentTimeMillis()
+        while (true) {
+            delay(15_000)
+            value = System.currentTimeMillis()
         }
     }
     LoadContent(loader) { wanted ->
@@ -198,7 +201,11 @@ private fun WantedTab(app: DesktopApp) {
                     }, filled = false)
                     if (server?.youtubeNow == true) {
                         if (album.id in fetching) {
-                            Box(Modifier.width(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(22.dp), color = hud.accent, strokeWidth = 2.dp) }
+                            // The button's room stays taken, so the row doesn't move while it spins.
+                            Box(contentAlignment = Alignment.Center) {
+                                HudButton("From YouTube now", {}, Modifier.alpha(0f), filled = false, enabled = false)
+                                CircularProgressIndicator(Modifier.size(22.dp), color = hud.accent, strokeWidth = 2.dp)
+                            }
                         } else {
                             HudButton("From YouTube now", { app.youtubeNow(album) }, filled = false)
                         }

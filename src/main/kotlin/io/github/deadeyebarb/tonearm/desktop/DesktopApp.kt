@@ -218,6 +218,9 @@ class DesktopApp {
     private val _fromYouTube = MutableStateFlow(setOf<Int>())
     /** Wanted albums (Lidarr ids) being fetched from YouTube Music right now, for the Wanted tab's spinners. */
     val fromYouTube: StateFlow<Set<Int>> = _fromYouTube.asStateFlow()
+    private val _youtubeAnswers = MutableStateFlow(0)
+    /** Goes up when a YouTube now is done, so the Wanted tab fetches its list again and the tags show what came of it. */
+    val youtubeAnswers: StateFlow<Int> = _youtubeAnswers.asStateFlow()
 
     /**
      * Has the Tonearm server get a wanted [album] from YouTube Music now, and says what came of it. Lidarr takes a minute
@@ -235,6 +238,7 @@ class DesktopApp {
                 message(e.userMessage())
             } finally {
                 _fromYouTube.update { it - album.id }
+                _youtubeAnswers.update { it + 1 }
             }
         }
     }
